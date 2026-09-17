@@ -221,6 +221,7 @@ export class AgySession {
 }
 
 export function normalizeOptions(options: SessionOptions): SessionOptions {
-  const skipPermissions = options.skipPermissions ?? (process.env.ANTIGRAVITY_SKIP_PERMISSIONS !== "0" && process.env.ANTIGRAVITY_SKIP_PERMISSIONS !== "false");
+  const envValue = (process.env.ANTIGRAVITY_SKIP_PERMISSIONS ?? "").toLowerCase();
+  const skipPermissions = options.skipPermissions ?? !(envValue === "0" || envValue === "false" || envValue === "no");
   return { ...options, cwd: resolve(options.cwd), skipPermissions };
 }

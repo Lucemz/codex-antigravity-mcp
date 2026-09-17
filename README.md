@@ -146,3 +146,21 @@ npm test
 ## 📄 Licencia
 
 Este proyecto es código abierto bajo la licencia [MIT](LICENSE).
+## Recuperar herramientas MCP en Codex
+
+Si el skill aparece pero no aparecen `antigravity_session_*`, elimina la instalación y el marketplace antiguos, actualiza la caché y reinstala una sola copia:
+
+```bash
+CODEX=/Applications/ChatGPT.app/Contents/Resources/codex
+REPO=/Users/fitzgeraldbendezu/projects/mcp-antigravity/codex-antigravity-mcp
+
+"$CODEX" plugin remove codex-antigravity@codex-antigravity-marketplace
+"$CODEX" plugin marketplace remove codex-antigravity-marketplace
+git -C "$REPO" fetch --tags origin
+git -C "$REPO" checkout main
+git -C "$REPO" pull --ff-only origin main
+"$CODEX" plugin marketplace add https://github.com/Lucemz/codex-antigravity-mcp --ref main
+"$CODEX" plugin add codex-antigravity@codex-antigravity-marketplace
+```
+
+Luego cierra completamente Codex (no solo la ventana), vuelve a abrirlo y crea una tarea nueva. Comprueba con `codex plugin list --json` que el plugin esté `enabled: true`. No ejecutes simultáneamente un `.mcp.json` manual y el plugin.

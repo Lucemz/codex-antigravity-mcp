@@ -1,11 +1,9 @@
 {
   "mcpServers": {
     "antigravity": {
-      "command": "bash",
-      "args": [
-        "-c",
-        "for d in \"$CLAUDE_PLUGIN_ROOT\" \"$CODEX_PLUGIN_ROOT\" \"$(dirname \"$0\")\" \"$PWD\" \"$HOME/plugins/codex-antigravity\" \"$HOME/.codex/plugins/codex-antigravity\" \"$HOME/.claude/plugins/codex-antigravity\"; do [ -n \"$d\" ] && [ -f \"$d/bin/run.sh\" ] && exec bash \"$d/bin/run.sh\" \"$@\"; [ -n \"$d\" ] && [ -f \"$d/plugin/bin/run.sh\" ] && exec bash \"$d/plugin/bin/run.sh\" \"$@\"; done; exec bash ./bin/run.sh \"$@\""
-      ]
+      "command": "./bin/run.sh",
+      "args": [],
+      "cwd": "."
     }
   }
 }

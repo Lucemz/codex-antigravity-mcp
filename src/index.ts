@@ -65,7 +65,7 @@ async function main(): Promise<void> {
         effort: args.effort,
         agent: args.agent,
         mode: (args.mode ?? "plan") as ExecutionMode,
-        sandbox: args.sandbox ?? false,
+        sandbox: args.sandbox ?? true,
         skipPermissions: args.skipPermissions
       };
       const session = manager.create(options);
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
       if (!isDirectory(args.cwd)) throw new Error(`cwd is not a directory: ${args.cwd}`);
       const session = manager.create({
         cwd: args.cwd, model: args.model, effort: args.effort, agent: args.agent,
-        mode: (args.mode ?? "plan") as ExecutionMode, sandbox: args.sandbox ?? false,
+        mode: (args.mode ?? "plan") as ExecutionMode, sandbox: args.sandbox ?? true,
         skipPermissions: args.skipPermissions
       });
       id = session.id;

@@ -21748,7 +21748,8 @@ ${this.turnText}` : reason;
   }
 };
 function normalizeOptions(options) {
-  const skipPermissions = options.skipPermissions ?? (process.env.ANTIGRAVITY_SKIP_PERMISSIONS !== "0" && process.env.ANTIGRAVITY_SKIP_PERMISSIONS !== "false");
+  const envValue = (process.env.ANTIGRAVITY_SKIP_PERMISSIONS ?? "").toLowerCase();
+  const skipPermissions = options.skipPermissions ?? !(envValue === "0" || envValue === "false" || envValue === "no");
   return { ...options, cwd: resolve(options.cwd), skipPermissions };
 }
 
@@ -21889,7 +21890,7 @@ async function main() {
         effort: args.effort,
         agent: args.agent,
         mode: args.mode ?? "plan",
-        sandbox: args.sandbox ?? false,
+        sandbox: args.sandbox ?? true,
         skipPermissions: args.skipPermissions
       };
       const session = manager.create(options);
@@ -21955,7 +21956,7 @@ async function main() {
         effort: args.effort,
         agent: args.agent,
         mode: args.mode ?? "plan",
-        sandbox: args.sandbox ?? false,
+        sandbox: args.sandbox ?? true,
         skipPermissions: args.skipPermissions
       });
       id = session.id;
