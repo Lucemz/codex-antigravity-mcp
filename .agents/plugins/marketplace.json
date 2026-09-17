@@ -12,7 +12,7 @@
       "displayName": "Codex Antigravity",
       "version": "1.0.0",
       "description": "Delegate tasks from Codex to Google Antigravity (Gemini) as an autonomous coding subagent",
-      "path": "./plugin"
+      "source": "./plugin"
     }
   ]
 }
