@@ -1,0 +1,26 @@
+{
+  "name": "codex-antigravity-marketplace",
+  "owner": {
+    "name": "Lucemz"
+  },
+  "interface": {
+    "displayName": "Codex Antigravity Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "codex-antigravity",
+      "displayName": "Codex Antigravity",
+      "version": "1.1.0",
+      "description": "Local MCP adapter for delegating coding tasks from Codex to Google Antigravity CLI.",
+      "source": {
+        "source": "local",
+        "path": "../../plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Development"
+    }
+  ]
+}
