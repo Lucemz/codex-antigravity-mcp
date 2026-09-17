@@ -41,7 +41,7 @@ for p in "${EXTRA_PATHS[@]}"; do
 done
 export PATH
 
-# Locate Node.js executable
+# 1. Locate existing Node.js executable on the system
 NODE_BIN=""
 
 if command -v node >/dev/null 2>&1; then
@@ -65,9 +65,71 @@ if [ -n "$NODE_BIN" ]; then
   exec "$NODE_BIN" "$ENTRY" "$@"
 fi
 
-# Fallback: check bun
+# 2. Check fallback runtime: bun
 if command -v bun >/dev/null 2>&1; then
   exec bun "$ENTRY" "$@"
+fi
+
+# 3. If Node is not installed at all, auto-download portable standalone Node.js (Plug & Play)
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/codex-antigravity"
+NODE_VERSION="v20.18.0"
+
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+
+case "$OS" in
+  Darwin)
+    PLATFORM="darwin"
+    ;;
+  Linux)
+    PLATFORM="linux"
+    ;;
+  *)
+    PLATFORM=""
+    ;;
+esac
+
+case "$ARCH" in
+  arm64|aarch64)
+    ARCH_NAME="arm64"
+    ;;
+  x86_64|amd64)
+    ARCH_NAME="x64"
+    ;;
+  *)
+    ARCH_NAME=""
+    ;;
+esac
+
+if [ -n "$PLATFORM" ] && [ -n "$ARCH_NAME" ]; then
+  TARBALL_NAME="node-${NODE_VERSION}-${PLATFORM}-${ARCH_NAME}"
+  STANDALONE_DIR="$CACHE_DIR/$TARBALL_NAME"
+  STANDALONE_NODE="$STANDALONE_DIR/bin/node"
+
+  if [ -x "$STANDALONE_NODE" ]; then
+    exec "$STANDALONE_NODE" "$ENTRY" "$@"
+  fi
+
+  # Auto-fetch standalone Node.js archive
+  mkdir -p "$CACHE_DIR"
+  echo "Node.js not detected on system. Auto-downloading portable Node.js ($NODE_VERSION) for codex-antigravity..." >&2
+
+  URL="https://nodejs.org/dist/${NODE_VERSION}/${TARBALL_NAME}.tar.gz"
+  TMP_TAR="$CACHE_DIR/${TARBALL_NAME}.tar.gz"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$URL" -o "$TMP_TAR"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$TMP_TAR" "$URL"
+  fi
+
+  if [ -f "$TMP_TAR" ]; then
+    tar -xzf "$TMP_TAR" -C "$CACHE_DIR" 2>/dev/null || true
+    rm -f "$TMP_TAR"
+    if [ -x "$STANDALONE_NODE" ]; then
+      exec "$STANDALONE_NODE" "$ENTRY" "$@"
+    fi
+  fi
 fi
 
 echo "Error: Node.js (v18+) is required to run codex-antigravity MCP plugin." >&2

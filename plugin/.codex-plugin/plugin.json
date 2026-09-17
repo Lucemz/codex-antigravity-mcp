@@ -6,7 +6,8 @@
   "skills": "./skills/",
   "mcpServers": {
     "antigravity": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/run.sh"
+      "command": "bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/run.sh"]
     }
   },
   "interface": {
