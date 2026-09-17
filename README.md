@@ -5,77 +5,73 @@
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](package.json)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-purple.svg)](https://modelcontextprotocol.io)
 
-Plugin y servidor MCP Plug-and-Play para **Codex** (Desktop & CLI) que permite delegar tareas de ingeniería, refactorización, auditoría y ejecución de tests a **Google Antigravity CLI (`agy`)** como un subagente autónomo persistente potenciado por Gemini.
+Plugin y servidor MCP para **Codex** (Desktop & CLI) que permite delegar tareas de ingeniería de software, refactorización, auditoría, creación de ramas git y ejecución de tests a **Google Antigravity CLI (`agy`)** como un subagente autónomo persistente potenciado por Gemini.
 
 ---
 
-## ⚡ Plug and Play (100% Zero-Config)
+## 🚀 Guía de Instalación Paso a Paso (Paso a Paso)
 
-A partir de la versión **v1.1.0**, el plugin incluye un launcher universal (`bin/run.sh`) que:
-- 🔍 **Auto-detecta Node.js**: Encuentra Node automáticamente en Homebrew (`/opt/homebrew`, `/usr/local`), NVM (`~/.nvm`), fnm, Volta, asdf, mise, pnpm o Bun. No requiere configurar variables de entorno en apps de escritorio de Codex.
-- 🎯 **Auto-detecta Antigravity (`agy`)**: Escanea rutas estándar (`/opt/homebrew/bin`, `~/.gemini/antigravity/bin`, `~/.gemini/antigravity-cli/bin`, `/Applications/Antigravity.app`, etc.).
-- 📦 **Instalación Directa desde el Marketplace de Codex**: Agrega el repositorio de GitHub y el plugin quedará listo para usar al instante.
+Sigue estos 3 sencillos pasos para dejar el plugin funcionando en **Codex Desktop**:
 
----
-
-## 📋 Requisitos Previos (Prerequisites)
-
-Para utilizar este plugin necesitas tener instalado **Google Antigravity CLI (`agy`)** en tu equipo:
-
-### 1. Descargar e Instalar Antigravity CLI / Gemini CLI
-Si aún no lo tienes instalado:
-- Sigue la guía oficial de instalación de Google Antigravity CLI: [Google Antigravity Docs](https://antigravity.google/docs/cli/reference)
-- O instala mediante tu gestor de paquetes / instalador de Google Gemini.
-
-### 2. Autenticar Antigravity CLI
-Abre tu terminal y ejecuta una sola vez:
-```sh
-# Verifica que agy esté instalado
-agy --version
-
-# Inicia sesión interactivamente con tu cuenta de Google
-agy
-
-# Comprueba que los modelos estén disponibles
-agy models
-```
-
-> **Nota:** Si instalaste `agy` en una ruta personalizada fuera del estándar, puedes definir `export ANTIGRAVITY_AGY_PATH="/ruta/personalizada/agy"`.
+### Paso 1: Instalar Node.js en tu equipo
+Si aún no tienes Node.js instalado:
+- **macOS (Homebrew)**:
+  ```sh
+  brew install node
+  ```
+- O descarga el instalador oficial desde [nodejs.org](https://nodejs.org) (v18 o superior).
 
 ---
 
-## 🚀 Instalación en Codex (Installation)
+### Paso 2: Instalar y Autenticar Google Antigravity CLI (`agy`)
+El plugin utiliza la CLI oficial de Antigravity (`agy`) para comunicarse con los modelos de Gemini.
 
-### Método 1: Desde el Marketplace de Plugins de Codex (Recomendado)
+1. Instala `agy` siguiendo la [documentación oficial de Antigravity](https://antigravity.google/docs/cli/reference) o mediante el instalador de Google Gemini.
+2. Abre tu **terminal** y ejecuta `agy` para iniciar sesión con tu cuenta de Google:
+   ```sh
+   # 1. Verifica la versión
+   agy --version
 
+   # 2. Inicia sesión interactivamente (solo se hace una vez)
+   agy
+
+   # 3. Comprueba que los modelos respondan
+   agy models
+   ```
+
+> 💡 **Nota:** Si tienes `agy` instalado en una ruta no estándar, puedes exportar `export ANTIGRAVITY_AGY_PATH="/ruta/a/tu/agy"`.
+
+---
+
+### Paso 3: Instalar el Plugin en Codex Desktop
+
+#### Método A: Desde la interfaz de Codex Desktop (Recomendado)
 1. Abre **Codex Desktop**.
 2. Ve a la sección **Plugins** o **Marketplace**.
-3. Selecciona **Add Marketplace / Add Repository** (Añadir Marketplace o repositorio).
-4. Pega la URL del repositorio:
+3. Haz clic en **Add Marketplace / Add Repository** (Añadir Marketplace o repositorio).
+4. Pega la URL oficial del repositorio:
    ```text
    https://github.com/Lucemz/codex-antigravity-mcp
    ```
-5. Instala el plugin **Codex Antigravity**. ¡Listo!
+5. Haz clic en **Instalar / Install**.
+6. **Abre un nuevo chat** (o reinicia Codex Desktop). ¡Listo!
 
 ---
 
-### Método 2: Instalación Local / Desarrollador
-
-Si deseas clonar o compilar desde el código fuente:
+#### Método B: Instalación local por consola (Alternativa para Desarrolladores)
+Si prefieres clonar e instalar directamente desde la terminal:
 
 ```sh
 # 1. Clonar el repositorio
 git clone https://github.com/Lucemz/codex-antigravity-mcp.git
 cd codex-antigravity-mcp
 
-# 2. Instalar dependencias y compilar
+# 2. Instalar dependencias y desplegar
 npm install
-npm test
-npm run build
-
-# 3. Desplegar a tu carpeta local de plugins (~/plugins/codex-antigravity)
 npm run install:plugin
 ```
+*El script compilará el código, registrará el servidor MCP en tu `~/.codex/config.toml` y copiará los skills a `~/.codex/skills/`.*
+*Luego, reinicia Codex Desktop (`Cmd + Q`).*
 
 ---
 
@@ -91,7 +87,9 @@ npm run install:plugin
 | `antigravity_run` | Ejecuta un turno aislado en Antigravity y cierra la sesión automáticamente. |
 
 ### Parámetros Principales:
-- `mode`: `"plan"` (inspección y análisis en solo lectura) o `"accept-edits"` (autorización para editar archivos, crear ramas git y correr comandos).
+- `mode`:
+  - `"plan"`: Inspección y análisis en solo lectura (sin modificar archivos).
+  - `"accept-edits"`: Autorización completa para escribir archivos, crear ramas git y correr comandos.
 - `skipPermissions`: `true` (por defecto) para ejecución autónoma sin bloqueos interactivos.
 - `subagents`: `"auto"` (por defecto), `"required"`, o `"off"`.
 - `model`: ID opcional del modelo Gemini (ej. `gemini-3.7-flash-medium`, `gemini-3.8-flash-high`, `gemini-3.1-pro-high`).
@@ -100,9 +98,14 @@ npm run install:plugin
 
 ## 💡 Ejemplos de Uso desde Codex
 
-En Codex, simplemente menciona `@Codex Antigravity` o pídele que use las herramientas de Antigravity:
+En cualquier conversación de Codex, puedes invocar al plugin escribiendo:
 
-### 1. Desarrollo Completo, Ramas y Tests (`accept-edits`)
+### 1. Verificar Estado y Conexión
+```text
+@Codex Antigravity ejecuta antigravity_status y dime qué modelos de Gemini están disponibles.
+```
+
+### 2. Desarrollo Completo, Ramas y Tests (`accept-edits`)
 ```text
 @Codex Antigravity en /Users/usuario/proyectos/mi-app:
 Crea una sesión persistente en mode "accept-edits".
@@ -112,18 +115,28 @@ Crea una sesión persistente en mode "accept-edits".
 4. Si los tests pasan, haz commit y reporta el diff final.
 ```
 
-### 2. Auditoría Arquitectónica y Revisión (`plan`)
+### 3. Auditoría Arquitectónica y Revisión (`plan`)
 ```text
 @Codex Antigravity en /Users/usuario/proyectos/mi-app:
 Crea una sesión en mode "plan".
-Analiza la arquitectura del proyecto, detecta posibles mejoras y genera un plan estructurado.
+Analiza la arquitectura del proyecto, detecta posibles mejoras y genera un plan estructurado sin modificar archivos.
 ```
 
 ---
 
-## 🧪 Pruebas Unitarias (Tests)
+## ❓ Preguntas Frecuentes (FAQ / Troubleshooting)
 
-El proyecto incluye 13 suites de pruebas unitarias automatizadas:
+### 1. ¿Por qué me sale `antigravity_... undefined` o no veo las herramientas?
+- **Solución:** En Codex Desktop, las herramientas MCP se cargan al iniciar una nueva conversación. Cierra la conversación actual y abre un **Nuevo Chat**, o reinicia la aplicación con `Cmd + Q`.
+
+### 2. ¿Qué hacer si sale `agy was not found` o error de autenticación?
+- **Solución:** Abre tu terminal y corre `agy`. Si no has iniciado sesión en Google, el comando te guiará para autenticar tu cuenta.
+
+---
+
+## 🧪 Pruebas Automatizadas (Tests)
+
+El repositorio incluye pruebas unitarias para validar timeouts, heartbeats de inactividad y recuperación de respuestas:
 
 ```sh
 npm test
@@ -131,6 +144,6 @@ npm test
 
 ---
 
-## 📄 Licencia (License)
+## 📄 Licencia
 
 Este proyecto es código abierto bajo la licencia [MIT](LICENSE).
