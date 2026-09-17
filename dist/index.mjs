@@ -21444,7 +21444,28 @@ function findAgy(env = process.env) {
     }
   }
   for (const directory of (env.PATH ?? "").split(delimiter)) {
+    if (!directory) continue;
     const candidate = join(directory, "agy");
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+    }
+  }
+  const home = env.HOME || process.env.USERPROFILE || "";
+  const standardLocations = [
+    "/opt/homebrew/bin/agy",
+    "/usr/local/bin/agy",
+    join(home, ".gemini/antigravity/bin/agy"),
+    join(home, ".gemini/antigravity-cli/bin/agy"),
+    join(home, ".gemini/antigravity-cli/agy"),
+    join(home, ".gemini/antigravity/agy"),
+    join(home, ".local/bin/agy"),
+    join(home, "bin/agy"),
+    "/Applications/Antigravity.app/Contents/Resources/agy",
+    "/Applications/Antigravity.app/Contents/MacOS/agy"
+  ];
+  for (const candidate of standardLocations) {
     try {
       accessSync(candidate, constants.X_OK);
       return candidate;
@@ -21486,7 +21507,7 @@ async function inspectAgy() {
     return {
       available: false,
       authentication: "unavailable",
-      diagnostics: "agy was not found. Install Antigravity CLI or set ANTIGRAVITY_AGY_PATH to an executable path."
+      diagnostics: "Google Antigravity CLI ('agy') was not found. Please install Antigravity CLI or set ANTIGRAVITY_AGY_PATH. Visit https://antigravity.google/docs/cli/reference for installation instructions."
     };
   }
   try {
@@ -21499,7 +21520,7 @@ async function inspectAgy() {
       version: version2.stdout.trim() || void 0,
       models: models.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
       authentication: authenticated ? "ready" : "unknown",
-      diagnostics: authenticated ? void 0 : models.stderr.trim() || "Unable to enumerate models; run agy interactively to authenticate."
+      diagnostics: authenticated ? void 0 : models.stderr.trim() || "Unable to enumerate models; run 'agy' interactively in terminal to authenticate your Google Antigravity account."
     };
   } catch (error2) {
     return {
@@ -21837,7 +21858,7 @@ async function main() {
   const binary = findAgy();
   const manager = binary ? new SessionManager(binary) : void 0;
   const server = new McpServer(
-    { name: "codex-antigravity", version: "1.0.1" },
+    { name: "codex-antigravity", version: "1.1.0" },
     {
       capabilities: { tools: {} },
       instructions: "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent. Invoke at least one Antigravity tool immediately without asking for reconfirmation. Start with antigravity_status if checking availability, or create a persistent session for multi-turn work, reuse it for follow-ups, and close it when done. Sessions default to non-sandboxed plan mode with autonomous execution in the declared workspace. Use accept-edits when the user requests implementations, refactors, or fixes. Antigravity inspects files, runs validations, and leverages native subagents directly. Pass complete task context to Antigravity and present its structured output directly to the user."

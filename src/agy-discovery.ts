@@ -27,7 +27,10 @@ export function findAgy(env = process.env): string | undefined {
       return undefined;
     }
   }
+
+  // 1. Check directories in PATH
   for (const directory of (env.PATH ?? "").split(delimiter)) {
+    if (!directory) continue;
     const candidate = join(directory, "agy");
     try {
       accessSync(candidate, constants.X_OK);
@@ -36,6 +39,31 @@ export function findAgy(env = process.env): string | undefined {
       // Try the next directory.
     }
   }
+
+  // 2. Check well-known installation locations on macOS & Linux
+  const home = env.HOME || process.env.USERPROFILE || "";
+  const standardLocations = [
+    "/opt/homebrew/bin/agy",
+    "/usr/local/bin/agy",
+    join(home, ".gemini/antigravity/bin/agy"),
+    join(home, ".gemini/antigravity-cli/bin/agy"),
+    join(home, ".gemini/antigravity-cli/agy"),
+    join(home, ".gemini/antigravity/agy"),
+    join(home, ".local/bin/agy"),
+    join(home, "bin/agy"),
+    "/Applications/Antigravity.app/Contents/Resources/agy",
+    "/Applications/Antigravity.app/Contents/MacOS/agy"
+  ];
+
+  for (const candidate of standardLocations) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Try next
+    }
+  }
+
   return undefined;
 }
 
@@ -69,7 +97,7 @@ export async function inspectAgy(): Promise<AgyStatus> {
     return {
       available: false,
       authentication: "unavailable",
-      diagnostics: "agy was not found. Install Antigravity CLI or set ANTIGRAVITY_AGY_PATH to an executable path."
+      diagnostics: "Google Antigravity CLI ('agy') was not found. Please install Antigravity CLI or set ANTIGRAVITY_AGY_PATH. Visit https://antigravity.google/docs/cli/reference for installation instructions."
     };
   }
   try {
@@ -82,7 +110,7 @@ export async function inspectAgy(): Promise<AgyStatus> {
       version: version.stdout.trim() || undefined,
       models: models.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
       authentication: authenticated ? "ready" : "unknown",
-      diagnostics: authenticated ? undefined : (models.stderr.trim() || "Unable to enumerate models; run agy interactively to authenticate.")
+      diagnostics: authenticated ? undefined : (models.stderr.trim() || "Unable to enumerate models; run 'agy' interactively in terminal to authenticate your Google Antigravity account.")
     };
   } catch (error) {
     return {

@@ -1,156 +1,129 @@
 # Codex Antigravity MCP (`codex-antigravity-mcp`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.0.1](https://img.shields.io/badge/version-1.0.1-green.svg)](package.json)
-[![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](package.json)
+[![Version: 1.1.0](https://img.shields.io/badge/version-1.1.0-green.svg)](package.json)
+[![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](package.json)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-purple.svg)](https://modelcontextprotocol.io)
 
-Local Model Context Protocol (MCP) server that empowers **Codex** to delegate complex engineering tasks to **Google Antigravity CLI (`agy`)** as an autonomous, persistent coding subagent.
+Plugin y servidor MCP Plug-and-Play para **Codex** (Desktop & CLI) que permite delegar tareas de ingeniería, refactorización, auditoría y ejecución de tests a **Google Antigravity CLI (`agy`)** como un subagente autónomo persistente potenciado por Gemini.
 
 ---
 
-## 🌟 Highlights & Features
+## ⚡ Plug and Play (100% Zero-Config)
 
-- 🤖 **Codex as Supervisor, Antigravity as Autonomous Subagent**: Codex orchestrates workflows, while Antigravity (powered by Gemini models) executes code modifications, tests, builds, and Git workflows.
-- ⚡ **Sliding Inactivity Heartbeat**: 10-minute activity window that automatically refreshes whenever Antigravity performs an action (tool calls, file edits, streamed output). Long tasks never time out prematurely.
-- 🔄 **Persistent Multi-Turn Sessions**: Maintains conversation state and context across multiple turns without needing to rebuild project index each time.
-- 🛡️ **Headless Autonomy & Permission Management**: Executes non-blocking tool calls within the declared workspace (`--dangerously-skip-permissions`), preventing headless process deadlocks.
-- 📁 **Monorepo & Multi-Repo Aware**: Automatically detects nested repositories (e.g. `frontend/.git`, `backend/.git`) and executes Git and build operations in the correct subprojects.
-- 📊 **Structured Diagnostics & Recovery**: Captures partial streamed text, invoked tool logs, and bounded `stderr` diagnostics even if an error occurs. Automatically retries empty responses.
+A partir de la versión **v1.1.0**, el plugin incluye un launcher universal (`bin/run.sh`) que:
+- 🔍 **Auto-detecta Node.js**: Encuentra Node automáticamente en Homebrew (`/opt/homebrew`, `/usr/local`), NVM (`~/.nvm`), fnm, Volta, asdf, mise, pnpm o Bun. No requiere configurar variables de entorno en apps de escritorio de Codex.
+- 🎯 **Auto-detecta Antigravity (`agy`)**: Escanea rutas estándar (`/opt/homebrew/bin`, `~/.gemini/antigravity/bin`, `~/.gemini/antigravity-cli/bin`, `/Applications/Antigravity.app`, etc.).
+- 📦 **Instalación Directa desde el Marketplace de Codex**: Agrega el repositorio de GitHub y el plugin quedará listo para usar al instante.
 
 ---
 
-## 📋 Prerequisites
+## 📋 Requisitos Previos (Prerequisites)
 
-Before installing the plugin, ensure you have the following installed on your system:
+Para utilizar este plugin necesitas tener instalado **Google Antigravity CLI (`agy`)** en tu equipo:
 
-1. **Node.js** (v20.0.0 or higher) and `npm`.
-2. **Google Antigravity CLI (`agy`)**:
-   - The CLI interface to Google Antigravity and Gemini models.
-   - Install and authenticate `agy` on your machine:
-     ```sh
-     # Verify agy is installed and accessible in your PATH
-     agy --version
-     
-     # Authenticate your account (interactive login)
-     agy
-     
-     # Check available models
-     agy models
-     ```
-   - If `agy` is installed in a non-standard path, set the environment variable:
-     ```sh
-     export ANTIGRAVITY_AGY_PATH="/path/to/your/agy"
-     ```
+### 1. Descargar e Instalar Antigravity CLI / Gemini CLI
+Si aún no lo tienes instalado:
+- Sigue la guía oficial de instalación de Google Antigravity CLI: [Google Antigravity Docs](https://antigravity.google/docs/cli/reference)
+- O instala mediante tu gestor de paquetes / instalador de Google Gemini.
+
+### 2. Autenticar Antigravity CLI
+Abre tu terminal y ejecuta una sola vez:
+```sh
+# Verifica que agy esté instalado
+agy --version
+
+# Inicia sesión interactivamente con tu cuenta de Google
+agy
+
+# Comprueba que los modelos estén disponibles
+agy models
+```
+
+> **Nota:** Si instalaste `agy` en una ruta personalizada fuera del estándar, puedes definir `export ANTIGRAVITY_AGY_PATH="/ruta/personalizada/agy"`.
 
 ---
 
-## 🚀 Installation & Setup
+## 🚀 Instalación en Codex (Installation)
 
-### 1. Clone & Build the Repository
+### Método 1: Desde el Marketplace de Plugins de Codex (Recomendado)
+
+1. Abre **Codex Desktop**.
+2. Ve a la sección **Plugins** o **Marketplace**.
+3. Selecciona **Add Marketplace / Add Repository** (Añadir Marketplace o repositorio).
+4. Pega la URL del repositorio:
+   ```text
+   https://github.com/Lucemz/codex-antigravity-mcp
+   ```
+5. Instala el plugin **Codex Antigravity**. ¡Listo!
+
+---
+
+### Método 2: Instalación Local / Desarrollador
+
+Si deseas clonar o compilar desde el código fuente:
 
 ```sh
+# 1. Clonar el repositorio
 git clone https://github.com/Lucemz/codex-antigravity-mcp.git
 cd codex-antigravity-mcp
+
+# 2. Instalar dependencias y compilar
 npm install
 npm test
 npm run build
-```
 
-### 2. Install as a Codex Plugin
-
-Run the automated installer script to deploy to your personal Codex plugins directory (`~/plugins/codex-antigravity`):
-
-```sh
+# 3. Desplegar a tu carpeta local de plugins (~/plugins/codex-antigravity)
 npm run install:plugin
 ```
 
-### 3. Manual MCP Configuration (Optional)
-
-If you are using Codex or any other MCP client directly via `.mcp.json` or `config.json`:
-
-```json
-{
-  "mcpServers": {
-    "antigravity": {
-      "command": "node",
-      "args": ["/path/to/codex-antigravity-mcp/dist/index.mjs"],
-      "env": {
-        "ANTIGRAVITY_AGY_PATH": "agy"
-      }
-    }
-  }
-}
-```
-
 ---
 
-## 🛠️ MCP Tools Reference
+## 🛠️ Herramientas MCP Disponibles (MCP Tools)
 
-| Tool | Description |
+| Herramienta | Descripción |
 | :--- | :--- |
-| `antigravity_status` | Checks `agy` binary presence, available Gemini models, authentication status, and limits. |
-| `antigravity_session_create` | Creates a persistent multi-turn Antigravity session inside a target workspace `cwd`. |
-| `antigravity_session_prompt` | Sends a prompt to an active persistent session and waits for structured results. |
-| `antigravity_session_list` | Lists all active sessions, their state (`idle`/`running`), and queued turns. |
-| `antigravity_session_close` | Closes and cleans up a persistent session process. |
-| `antigravity_run` | Runs a single, isolated Antigravity turn (auto-closes session upon completion). |
+| `antigravity_status` | Comprueba la disponibilidad de `agy`, modelos Gemini activos, estado de autenticación y límites. |
+| `antigravity_session_create` | Inicia una sesión multi-turno persistente en el directorio de trabajo (`cwd`). |
+| `antigravity_session_prompt` | Envía un prompt a una sesión persistente activa y espera la respuesta estructurada. |
+| `antigravity_session_list` | Lista las sesiones activas, su estado (`idle`/`running`) y turnos en cola. |
+| `antigravity_session_close` | Cierra y libera los procesos de una sesión persistente. |
+| `antigravity_run` | Ejecuta un turno aislado en Antigravity y cierra la sesión automáticamente. |
 
-### Key Parameters:
-- `mode`: `"plan"` (read-only inspection and analysis) or `"accept-edits"` (full authorization to write files, run tests, and manage git branches).
-- `skipPermissions`: `true` (default) allows autonomous tool execution in headless mode.
-- `subagents`: `"auto"` (default), `"required"`, or `"off"`.
-- `model`: Optional Gemini model ID (e.g., `gemini-3.7-flash-medium`, `gemini-3.8-flash-high`, `gemini-3.1-pro-high`).
+### Parámetros Principales:
+- `mode`: `"plan"` (inspección y análisis en solo lectura) o `"accept-edits"` (autorización para editar archivos, crear ramas git y correr comandos).
+- `skipPermissions`: `true` (por defecto) para ejecución autónoma sin bloqueos interactivos.
+- `subagents`: `"auto"` (por defecto), `"required"`, o `"off"`.
+- `model`: ID opcional del modelo Gemini (ej. `gemini-3.7-flash-medium`, `gemini-3.8-flash-high`, `gemini-3.1-pro-high`).
 
 ---
 
-## 💡 Usage Examples from Codex
+## 💡 Ejemplos de Uso desde Codex
 
-In Codex, mention or tag `@Codex Antigravity` to supervise Antigravity:
+En Codex, simplemente menciona `@Codex Antigravity` o pídele que use las herramientas de Antigravity:
 
-### 1. Full Development, Branching & Testing (`accept-edits`)
+### 1. Desarrollo Completo, Ramas y Tests (`accept-edits`)
 ```text
-@Codex Antigravity en /ruta/a/mi-proyecto:
+@Codex Antigravity en /Users/usuario/proyectos/mi-app:
 Crea una sesión persistente en mode "accept-edits".
 1. Crea una rama git 'feature/nueva-funcionalidad'.
 2. Implementa los cambios solicitados en el código.
-3. Ejecuta la suite de pruebas y linters del proyecto.
-4. Si las pruebas pasan, haz un commit con los cambios y devuelve el diff y resumen.
+3. Ejecuta los tests del proyecto.
+4. Si los tests pasan, haz commit y reporta el diff final.
 ```
 
-### 2. Deep Architectural Review & Audit (`plan`)
+### 2. Auditoría Arquitectónica y Revisión (`plan`)
 ```text
-@Codex Antigravity en /ruta/a/mi-proyecto:
-Crea una sesión persistente en mode "plan".
-Analiza la arquitectura del backend, revisa posibles cuellos de botella de rendimiento y genera un informe detallado con prioridades.
-```
-
-### 3. Multi-Repo / Monorepos
-```text
-@Codex Antigravity en /ruta/a/monorepo:
-Crea una sesión en mode "accept-edits".
-Dentro del subproyecto 'backend-api':
-1. Añade validación de esquemas en las rutas de usuarios.
-2. Ejecuta los tests de 'backend-api'.
-3. Reporta los resultados.
+@Codex Antigravity en /Users/usuario/proyectos/mi-app:
+Crea una sesión en mode "plan".
+Analiza la arquitectura del proyecto, detecta posibles mejoras y genera un plan estructurado.
 ```
 
 ---
 
-## ⚙️ Environment Variables
+## 🧪 Pruebas Unitarias (Tests)
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `ANTIGRAVITY_AGY_PATH` | `agy` (from `PATH`) | Absolute path to the Antigravity CLI executable. |
-| `ANTIGRAVITY_SKIP_PERMISSIONS` | `1` (true) | Set `0` to disable `--dangerously-skip-permissions`. |
-| `ANTIGRAVITY_TURN_TIMEOUT_MS` | `600000` (10 min) | Inactivity timeout window per turn. |
-| `CODEX_PLUGINS_DIR` | `~/plugins` | Target directory for Codex plugin installation. |
-
----
-
-## 🧪 Testing
-
-The repository includes a comprehensive unit test suite with mock binaries to test process serialization, timeout heartbeat, recovery, and error resilience:
+El proyecto incluye 13 suites de pruebas unitarias automatizadas:
 
 ```sh
 npm test
@@ -158,6 +131,6 @@ npm test
 
 ---
 
-## 📄 License
+## 📄 Licencia (License)
 
-This project is licensed under the [MIT License](LICENSE).
+Este proyecto es código abierto bajo la licencia [MIT](LICENSE).
