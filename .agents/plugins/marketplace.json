@@ -14,7 +14,7 @@
       "description": "Local MCP adapter for delegating coding tasks from Codex to Google Antigravity CLI.",
       "source": {
         "source": "local",
-        "path": "../../plugin"
+        "path": "./plugin"
       },
       "policy": {
         "installation": "AVAILABLE",
