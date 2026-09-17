@@ -9,9 +9,9 @@ Plugin y servidor MCP para **Codex** (Desktop & CLI) que permite delegar tareas 
 
 ---
 
-## 🚀 Guía de Instalación Paso a Paso (Paso a Paso)
+## 🚀 Guía de Instalación y Puesta en Marcha (Paso a Paso)
 
-Sigue estos 3 sencillos pasos para dejar el plugin funcionando en **Codex Desktop**:
+Sigue estos pasos en orden para dejar el plugin 100% operativo en tu equipo:
 
 ### Paso 1: Instalar Node.js en tu equipo
 Si aún no tienes Node.js instalado:
@@ -19,7 +19,7 @@ Si aún no tienes Node.js instalado:
   ```sh
   brew install node
   ```
-- O descarga el instalador oficial desde [nodejs.org](https://nodejs.org) (v18 o superior).
+- O descarga el instalador oficial desde [nodejs.org](https://nodejs.org) (versión 18 o superior).
 
 ---
 
@@ -39,39 +39,38 @@ El plugin utiliza la CLI oficial de Antigravity (`agy`) para comunicarse con los
    agy models
    ```
 
-> 💡 **Nota:** Si tienes `agy` instalado en una ruta no estándar, puedes exportar `export ANTIGRAVITY_AGY_PATH="/ruta/a/tu/agy"`.
+> 💡 **Nota:** Si tienes `agy` instalado en una ruta personalizada fuera del estándar, puedes definir `export ANTIGRAVITY_AGY_PATH="/ruta/a/tu/agy"`.
 
 ---
 
-### Paso 3: Instalar el Plugin en Codex Desktop
-
-#### Método A: Desde la interfaz de Codex Desktop (Recomendado)
-1. Abre **Codex Desktop**.
-2. Ve a la sección **Plugins** o **Marketplace**.
-3. Haz clic en **Add Marketplace / Add Repository** (Añadir Marketplace o repositorio).
-4. Pega la URL oficial del repositorio:
-   ```text
-   https://github.com/Lucemz/codex-antigravity-mcp
-   ```
-5. Haz clic en **Instalar / Install**.
-6. **Abre un nuevo chat** (o reinicia Codex Desktop). ¡Listo!
-
----
-
-#### Método B: Instalación local por consola (Alternativa para Desarrolladores)
-Si prefieres clonar e instalar directamente desde la terminal:
+### Paso 3: Clonar el Repositorio y Compilar con Node
+Antes de activar el plugin en Codex Desktop, descarga el proyecto e instálalo localmente por consola para que se generen los ejecutables y se registre la configuración:
 
 ```sh
 # 1. Clonar el repositorio
 git clone https://github.com/Lucemz/codex-antigravity-mcp.git
 cd codex-antigravity-mcp
 
-# 2. Instalar dependencias y desplegar
+# 2. Instalar dependencias y compilar
 npm install
+npm run build
+
+# 3. Registrar el plugin localmente en Codex
 npm run install:plugin
 ```
-*El script compilará el código, registrará el servidor MCP en tu `~/.codex/config.toml` y copiará los skills a `~/.codex/skills/`.*
-*Luego, reinicia Codex Desktop (`Cmd + Q`).*
+
+---
+
+### Paso 4: Activar en Codex Desktop
+1. Abre **Codex Desktop**.
+2. Ve a la sección **Plugins** / **Marketplace**.
+3. Haz clic en **Add Marketplace / Add Repository** (Añadir Marketplace o repositorio).
+4. Pega la URL del repositorio:
+   ```text
+   https://github.com/Lucemz/codex-antigravity-mcp
+   ```
+5. Haz clic en **Instalar / Install**.
+6. **Reinicia Codex Desktop (`Cmd + Q`)** o abre un **Nuevo Chat** para que las herramientas MCP se carguen en la sesión.
 
 ---
 
@@ -127,10 +126,10 @@ Analiza la arquitectura del proyecto, detecta posibles mejoras y genera un plan 
 ## ❓ Preguntas Frecuentes (FAQ / Troubleshooting)
 
 ### 1. ¿Por qué me sale `antigravity_... undefined` o no veo las herramientas?
-- **Solución:** En Codex Desktop, las herramientas MCP se cargan al iniciar una nueva conversación. Cierra la conversación actual y abre un **Nuevo Chat**, o reinicia la aplicación con `Cmd + Q`.
+- **Solución:** En Codex Desktop, las herramientas MCP se cargan al iniciar una nueva conversación. Cierra la conversación actual y abre un **Nuevo Chat**, o reinicia la aplicación completamente con `Cmd + Q`.
 
 ### 2. ¿Qué hacer si sale `agy was not found` o error de autenticación?
-- **Solución:** Abre tu terminal y corre `agy`. Si no has iniciado sesión en Google, el comando te guiará para autenticar tu cuenta.
+- **Solución:** Abre tu terminal y corre `agy`. Si no has iniciado sesión en Google, el comando te guiará interactivamente para autenticar tu cuenta.
 
 ---
 
