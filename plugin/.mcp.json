@@ -2,7 +2,7 @@
   "mcpServers": {
     "antigravity": {
       "command": "node",
-      "args": ["dist/index.mjs"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.mjs"]
     }
   }
 }
