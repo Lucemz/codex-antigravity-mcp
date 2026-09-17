@@ -1,0 +1,23 @@
+{
+  "name": "codex-antigravity-mcp",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "test": "tsx --test test/**/*.test.ts",
+    "validate:plugin": "python3 ${HOME}/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ${HOME}/plugins/codex-antigravity",
+    "install:plugin": "npm run build && node scripts/deploy-plugin.mjs && (test -f ${HOME}/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py && python3 ${HOME}/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py ${HOME}/plugins/codex-antigravity || true) && (test -f ${HOME}/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py && npm run validate:plugin || true) && node scripts/reinstall-plugin.mjs",
+    "uninstall:plugin": "node scripts/uninstall-plugin.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsup": "^8.5.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

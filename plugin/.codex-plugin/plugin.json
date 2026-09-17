@@ -1,0 +1,17 @@
+{
+  "name": "codex-antigravity",
+  "version": "0.1.0",
+  "description": "Persistent local Antigravity CLI sessions for Codex.",
+  "author": { "name": "Local developer" },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Codex Antigravity",
+    "shortDescription": "Use persistent local agy sessions from Codex.",
+    "longDescription": "A local MCP adapter that lets Codex start, reuse, inspect, and close Antigravity CLI conversations.",
+    "developerName": "Local developer",
+    "category": "Development",
+    "capabilities": ["Interactive"],
+    "defaultPrompt": ["Check Antigravity status and available models.", "Ask Antigravity to plan this change.", "Have Antigravity audit this repository."]
+  }
+}
