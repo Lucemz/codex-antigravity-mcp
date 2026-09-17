@@ -1,7 +1,7 @@
 # Codex Antigravity MCP (`codex-antigravity-mcp`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.0.0](https://img.shields.io/badge/version-1.0.0-green.svg)](package.json)
+[![Version: 1.0.1](https://img.shields.io/badge/version-1.0.1-green.svg)](package.json)
 [![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](package.json)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-purple.svg)](https://modelcontextprotocol.io)
 

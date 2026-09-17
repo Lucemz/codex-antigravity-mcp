@@ -1,6 +1,6 @@
 {
   "name": "codex-antigravity",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Delegate tasks from Codex to Google Antigravity (Gemini) as an autonomous coding subagent.",
   "author": { "name": "Lucemz" },
   "skills": "./skills/",

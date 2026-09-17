@@ -21837,7 +21837,7 @@ async function main() {
   const binary = findAgy();
   const manager = binary ? new SessionManager(binary) : void 0;
   const server = new McpServer(
-    { name: "codex-antigravity", version: "1.0.0" },
+    { name: "codex-antigravity", version: "1.0.1" },
     {
       capabilities: { tools: {} },
       instructions: "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent. Invoke at least one Antigravity tool immediately without asking for reconfirmation. Start with antigravity_status if checking availability, or create a persistent session for multi-turn work, reuse it for follow-ups, and close it when done. Sessions default to non-sandboxed plan mode with autonomous execution in the declared workspace. Use accept-edits when the user requests implementations, refactors, or fixes. Antigravity inspects files, runs validations, and leverages native subagents directly. Pass complete task context to Antigravity and present its structured output directly to the user."
