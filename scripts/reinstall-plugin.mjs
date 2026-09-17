@@ -7,15 +7,19 @@ const candidates = [
   "codex"
 ].filter(Boolean);
 
-let lastError;
+let reinstalled = false;
 for (const command of candidates) {
   if (command.includes("/") && !existsSync(command)) continue;
   try {
-    execFileSync(command, ["plugin", "add", "codex-antigravity@personal"], { stdio: "inherit" });
-    process.exit(0);
-  } catch (error) {
-    lastError = error;
+    execFileSync(command, ["plugin", "add", "codex-antigravity@personal"], { stdio: "ignore" });
+    reinstalled = true;
+    process.stdout.write("Codex CLI plugin state reloaded.\n");
+    break;
+  } catch {
+    // If CLI is not present or failed, continue
   }
 }
 
-throw new Error(`Could not reinstall codex-antigravity@personal. Set CODEX_CLI_PATH to a working Codex CLI. ${lastError instanceof Error ? lastError.message : ""}`);
+if (!reinstalled) {
+  process.stdout.write("Note: Codex CLI is not in PATH. If using Codex Desktop, restart Codex Desktop or reload plugins in the app UI to apply changes.\n");
+}
