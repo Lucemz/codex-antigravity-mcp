@@ -1,0 +1,18 @@
+{
+  "name": "codex-antigravity-marketplace",
+  "owner": {
+    "name": "Lucemz"
+  },
+  "interface": {
+    "displayName": "Codex Antigravity Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "codex-antigravity",
+      "displayName": "Codex Antigravity",
+      "version": "1.0.0",
+      "description": "Delegate tasks from Codex to Google Antigravity (Gemini) as an autonomous coding subagent",
+      "path": "./plugin"
+    }
+  ]
+}
