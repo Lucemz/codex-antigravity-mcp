@@ -1,11 +1,18 @@
 # Codex Antigravity MCP (`codex-antigravity-mcp`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.1.0](https://img.shields.io/badge/version-1.1.0-green.svg)](package.json)
+[![Version: 1.1.1](https://img.shields.io/badge/version-1.1.1-green.svg)](package.json)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](package.json)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-purple.svg)](https://modelcontextprotocol.io)
 
 Plugin y servidor MCP para **Codex** (Desktop & CLI) que permite delegar tareas de ingeniería de software, refactorización, auditoría, creación de ramas git y ejecución de tests a **Google Antigravity CLI (`agy`)** como un subagente autónomo persistente potenciado por Gemini.
+
+## Versión 1.1.1
+
+- Corrige la estructura del marketplace para Codex Desktop: `.agents/plugins/marketplace.json`.
+- Corrige la resolución del plugin local desde la raíz del marketplace.
+- Simplifica el launcher MCP para que Codex Desktop lo ejecute desde el paquete instalado.
+- Evita que el instalador local modifique configuraciones globales de Codex.
 
 ---
 
