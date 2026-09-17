@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
 set -e
 
-# Resolve script directory and plugin root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ -n "$CLAUDE_PLUGIN_ROOT" ] && [ -f "$CLAUDE_PLUGIN_ROOT/dist/index.mjs" ]; then
-  ENTRY="$CLAUDE_PLUGIN_ROOT/dist/index.mjs"
-elif [ -f "$PLUGIN_ROOT/dist/index.mjs" ]; then
-  ENTRY="$PLUGIN_ROOT/dist/index.mjs"
-elif [ -f "$SCRIPT_DIR/dist/index.mjs" ]; then
-  ENTRY="$SCRIPT_DIR/dist/index.mjs"
-else
+# Search for dist/index.mjs in all possible directory variations
+ENTRY=""
+SEARCH_DIRS=(
+  "$CLAUDE_PLUGIN_ROOT"
+  "$CODEX_PLUGIN_ROOT"
+  "$PLUGIN_ROOT"
+  "$SCRIPT_DIR"
+  "$PWD"
+  "$HOME/plugins/codex-antigravity"
+  "$HOME/.codex/plugins/codex-antigravity"
+  "$HOME/.claude/plugins/codex-antigravity"
+)
+
+for d in "${SEARCH_DIRS[@]}"; do
+  if [ -n "$d" ] && [ -f "$d/dist/index.mjs" ]; then
+    ENTRY="$d/dist/index.mjs"
+    break
+  elif [ -n "$d" ] && [ -f "$d/plugin/dist/index.mjs" ]; then
+    ENTRY="$d/plugin/dist/index.mjs"
+    break
+  fi
+done
+
+if [ -z "$ENTRY" ]; then
   echo "Error: Could not locate dist/index.mjs for codex-antigravity." >&2
   exit 1
 fi

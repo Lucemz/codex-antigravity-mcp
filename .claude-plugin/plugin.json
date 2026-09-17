@@ -4,12 +4,7 @@
   "description": "Delegate tasks from Codex to Google Antigravity (Gemini) as an autonomous coding subagent.",
   "author": { "name": "Lucemz" },
   "skills": "./skills/",
-  "mcpServers": {
-    "antigravity": {
-      "command": "bash",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/run.sh"]
-    }
-  },
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Codex Antigravity",
     "shortDescription": "Autonomous coding subagent powered by Google Antigravity (Gemini).",
