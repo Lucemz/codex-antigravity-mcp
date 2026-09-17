@@ -7,6 +7,7 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const source = resolve(root, "plugin");
 const dist = resolve(root, "dist");
 const bin = resolve(root, "bin");
+const skills = resolve(root, "plugin/skills");
 const destination = process.env.CODEX_PLUGINS_DIR
   ? resolve(process.env.CODEX_PLUGINS_DIR, "codex-antigravity")
   : resolve(homedir(), "plugins/codex-antigravity");
@@ -34,13 +35,46 @@ try {
     mcpServers: {
       antigravity: {
         command: "bash",
-        args: ["-c", `exec bash "${resolve(destination, "bin/run.sh")}" "$@"`]
+        args: [runShPath]
       }
     }
   };
   writeFileSync(resolve(destination, ".mcp.json"), `${JSON.stringify(mcpPayload, null, 2)}\n`);
 
-  // Register in local personal marketplace files
+  // 1. Copy skills to ~/.codex/skills/ for Codex Desktop
+  const codexSkillsDir = resolve(homedir(), ".codex/skills");
+  if (existsSync(skills)) {
+    try {
+      mkdirSync(codexSkillsDir, { recursive: true });
+      cpSync(skills, codexSkillsDir, { recursive: true });
+    } catch {}
+  }
+
+  // 2. Automatically configure [mcp_servers.antigravity] in ~/.codex/config.toml
+  const configTomlPath = resolve(homedir(), ".codex/config.toml");
+  try {
+    let tomlContent = "";
+    if (existsSync(configTomlPath)) {
+      tomlContent = readFileSync(configTomlPath, "utf8");
+    }
+
+    const antigravitySection = `[mcp_servers.antigravity]\ncommand = "bash"\nargs = ["${runShPath}"]\n`;
+
+    if (tomlContent.includes("[mcp_servers.antigravity]")) {
+      // Replace existing section
+      tomlContent = tomlContent.replace(/\[mcp_servers\.antigravity\][^\[]*/g, antigravitySection);
+    } else {
+      // Append section
+      tomlContent = `${antigravitySection}\n${tomlContent}`;
+    }
+
+    writeFileSync(configTomlPath, tomlContent);
+    process.stdout.write(`Configured MCP server in ${configTomlPath}\n`);
+  } catch (e) {
+    process.stderr.write(`Could not auto-update config.toml: ${e.message}\n`);
+  }
+
+  // 3. Register in local personal marketplace files
   const marketplacePaths = [
     resolve(homedir(), ".agents/plugins/marketplace.json"),
     resolve(homedir(), ".codex/marketplace.json")

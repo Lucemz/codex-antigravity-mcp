@@ -7,7 +7,7 @@
     "build": "tsup",
     "test": "tsx --test test/**/*.test.ts",
     "validate:plugin": "python3 ${HOME}/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ${HOME}/plugins/codex-antigravity",
-    "install:plugin": "npm run build && node scripts/deploy-plugin.mjs && (test -f ${HOME}/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py && python3 ${HOME}/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py ${HOME}/plugins/codex-antigravity || true) && (test -f ${HOME}/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py && npm run validate:plugin || true) && node scripts/reinstall-plugin.mjs",
+    "install:plugin": "npm run build && node scripts/deploy-plugin.mjs && node scripts/reinstall-plugin.mjs",
     "uninstall:plugin": "node scripts/uninstall-plugin.mjs"
   },
   "dependencies": {
