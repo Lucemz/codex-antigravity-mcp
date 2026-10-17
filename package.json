@@ -1,12 +1,12 @@
 {
   "name": "codex-antigravity-mcp",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "tsup",
     "test": "tsx --test test/**/*.test.ts",
-    "validate:plugin": "python3 ${HOME}/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin",
+    "validate:plugin": "node scripts/validate-plugin.mjs",
     "install:plugin": "npm run build && node scripts/deploy-plugin.mjs",
     "register:plugin": "node scripts/reinstall-plugin.mjs --register",
     "uninstall:plugin": "node scripts/uninstall-plugin.mjs"

@@ -21430,9 +21430,77 @@ var StdioServerTransport = class {
 };
 
 // src/agy-discovery.ts
-import { accessSync, constants, existsSync, statSync } from "fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "fs";
 import { spawn } from "child_process";
 import { delimiter, join } from "path";
+function buildSpawnEnv(baseEnv = process.env) {
+  const home = baseEnv.HOME || process.env.USERPROFILE || "";
+  const extraDirs = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/local/go/bin",
+    home ? join(home, "go/bin") : "",
+    home ? join(home, ".cargo/bin") : "",
+    home ? join(home, ".gemini/antigravity-cli/bin") : "",
+    home ? join(home, ".gemini/antigravity/bin") : "",
+    home ? join(home, ".local/bin") : "",
+    home ? join(home, "bin") : ""
+  ].filter(Boolean);
+  const currentParts = (baseEnv.PATH ?? "").split(delimiter).filter(Boolean);
+  const merged = [...currentParts];
+  for (const dir of extraDirs) {
+    if (!merged.includes(dir) && existsSync(dir)) {
+      merged.unshift(dir);
+    }
+  }
+  return {
+    ...baseEnv,
+    PATH: merged.join(delimiter),
+    AGY_CLI_OSC7501: "off"
+  };
+}
+function findExecutableInEnv(name, env = buildSpawnEnv()) {
+  for (const directory of (env.PATH ?? "").split(delimiter)) {
+    if (!directory) continue;
+    const candidate = join(directory, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+    }
+  }
+  return void 0;
+}
+function inspectCapabilities(env = buildSpawnEnv()) {
+  const home = env.HOME || process.env.USERPROFILE || "";
+  const goBinary = findExecutableInEnv("go", env);
+  const ffmpegBinary = findExecutableInEnv("ffmpeg", env);
+  const webmEncoderBinary = findExecutableInEnv("webm_encoder", env);
+  let settingsPermissions;
+  if (home) {
+    const settingsPath = join(home, ".gemini/antigravity-cli/settings.json");
+    try {
+      if (existsSync(settingsPath)) {
+        const parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+        settingsPermissions = {
+          toolPermission: typeof parsed.toolPermission === "string" ? parsed.toolPermission : void 0,
+          artifactReviewPolicy: typeof parsed.artifactReviewPolicy === "string" ? parsed.artifactReviewPolicy : void 0,
+          allowNonWorkspaceAccess: typeof parsed.allowNonWorkspaceAccess === "boolean" ? parsed.allowNonWorkspaceAccess : false,
+          enableTerminalSandbox: typeof parsed.enableTerminalSandbox === "boolean" ? parsed.enableTerminalSandbox : false
+        };
+      }
+    } catch {
+    }
+  }
+  return {
+    imageGeneration: true,
+    videoEncoding: Boolean(webmEncoderBinary || ffmpegBinary),
+    goBinary,
+    ffmpegBinary,
+    webmEncoderBinary,
+    settingsPermissions
+  };
+}
 function findAgy(env = process.env) {
   const explicit = env.ANTIGRAVITY_AGY_PATH;
   if (explicit) {
@@ -21476,7 +21544,10 @@ function findAgy(env = process.env) {
 }
 function runCommand(binary, args, timeoutMs = 3e4) {
   return new Promise((resolve2, reject) => {
-    const child = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(binary, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildSpawnEnv(process.env)
+    });
     let stdout = "";
     let stderr = "";
     const timeout = setTimeout(() => {
@@ -21501,6 +21572,21 @@ function runCommand(binary, args, timeoutMs = 3e4) {
     });
   });
 }
+function parseModelsOutput(raw) {
+  const lines = raw.split("\n").map((line) => line.replace(/\r/g, "").trim()).filter(Boolean);
+  const modelDetails = [];
+  for (const line of lines) {
+    const parts = line.split(/\t+|\s{2,}/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0) continue;
+    const id = parts[0];
+    const label = parts.slice(1).join(" ") || id;
+    modelDetails.push({ id, label });
+  }
+  return {
+    models: modelDetails.map((m) => m.id),
+    modelDetails
+  };
+}
 async function inspectAgy() {
   const binary = findAgy();
   if (!binary) {
@@ -21512,21 +21598,25 @@ async function inspectAgy() {
   }
   try {
     const version2 = await runCommand(binary, ["--version"]);
-    const models = await runCommand(binary, ["models"]);
-    const authenticated = models.code === 0;
+    const modelsResult = await runCommand(binary, ["models"]);
+    const authenticated = modelsResult.code === 0;
+    const parsed = parseModelsOutput(modelsResult.stdout);
     return {
       available: true,
       binary,
       version: version2.stdout.trim() || void 0,
-      models: models.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      models: parsed.models,
+      modelDetails: parsed.modelDetails,
       authentication: authenticated ? "ready" : "unknown",
-      diagnostics: authenticated ? void 0 : models.stderr.trim() || "Unable to enumerate models; run 'agy' interactively in terminal to authenticate your Google Antigravity account."
+      capabilities: inspectCapabilities(),
+      diagnostics: authenticated ? void 0 : modelsResult.stderr.trim() || "Unable to enumerate models; run 'agy' interactively in terminal to authenticate your Google Antigravity account."
     };
   } catch (error2) {
     return {
       available: true,
       binary,
       authentication: "unknown",
+      capabilities: inspectCapabilities(),
       diagnostics: error2 instanceof Error ? error2.message : String(error2)
     };
   }
@@ -21542,32 +21632,109 @@ function isDirectory(path) {
 // src/agy-session.ts
 import { spawn as spawn2 } from "child_process";
 import { randomUUID } from "crypto";
+import { existsSync as existsSync2, readdirSync } from "fs";
+import { join as join2, resolve } from "path";
 import { createInterface } from "readline";
-import { resolve } from "path";
 var MAX_DIAGNOSTIC_CHARS = 8e3;
+var MAX_EVENTS_BUFFER = 500;
+var READ_TOOLS = /* @__PURE__ */ new Set(["view_file", "grep_search", "find_by_name", "list_dir"]);
+var WRITE_TOOLS = /* @__PURE__ */ new Set([
+  "replace_file_content",
+  "multi_replace_file_content",
+  "write_to_file",
+  "sed_file",
+  "notebook_edit"
+]);
+var MEDIA_TOOLS = /* @__PURE__ */ new Set(["generate_image", "capture_browser_screenshot", "browser_subagent"]);
+var MEDIA_EXT_REGEX = /\.(?:png|jpe?g|webp|gif|svg|mp4|webm|mov|mp3|wav|m4a|pdf)$/i;
+var MEDIA_PATH_SCAN_REGEX = /(?:file:\/\/)?(\/[^\s"'`<>()[\]]+\.(?:png|jpe?g|webp|gif|svg|mp4|webm|mov|mp3|wav|m4a|pdf))/gi;
+function classifyError(errorText, diagnostics) {
+  const combined = `${errorText ?? ""}
+${diagnostics ?? ""}`;
+  if (/authentication expired|please log back in|not authenticated|unauthorized/i.test(combined)) {
+    return "AUTH_EXPIRED";
+  }
+  if (/credits balance is too low|quota|rate.?limit|resource_exhausted|capacity/i.test(combined)) {
+    return "QUOTA_EXCEEDED";
+  }
+  return "EXECUTION_ERROR";
+}
+function extractMediaPaths(text2) {
+  if (typeof text2 !== "string" || !text2) return [];
+  const found = /* @__PURE__ */ new Set();
+  for (const match of text2.matchAll(MEDIA_PATH_SCAN_REGEX)) {
+    const candidate = match[1]?.replace(/[.,;:]+$/, "");
+    if (candidate && MEDIA_EXT_REGEX.test(candidate)) {
+      found.add(candidate);
+    }
+  }
+  return [...found];
+}
+function extractToolTarget(params, subagents) {
+  if (Array.isArray(subagents) && subagents.length > 0) {
+    const labels = subagents.map((s) => {
+      if (!s || typeof s !== "object") return void 0;
+      const role = s.role || s.Role;
+      const typeName = s.type_name || s.type || s.TypeName;
+      if (role && typeName && role.toLowerCase() !== typeName.toLowerCase()) {
+        return `${role} (${typeName})`;
+      }
+      return role || typeName;
+    }).filter(Boolean).join(", ");
+    if (labels) return labels.slice(0, 180);
+  }
+  if (!params || typeof params !== "object") return void 0;
+  if (Array.isArray(params.questions) && params.questions.length > 0) {
+    const q = params.questions[0];
+    if (q && typeof q.question === "string" && q.question.trim()) {
+      return q.question.trim().replace(/\s+/g, " ").slice(0, 200);
+    }
+  }
+  const candidateKeys = [
+    "AbsolutePath",
+    "TargetFile",
+    "FilePath",
+    "ImageName",
+    "DirectoryPath",
+    "SearchPath",
+    "path",
+    "CommandLine",
+    "command",
+    "Prompt",
+    "Query",
+    "query",
+    "Pattern",
+    "Url",
+    "question",
+    "reason",
+    "Recipient",
+    "TaskId"
+  ];
+  for (const key of candidateKeys) {
+    const val = params[key];
+    if (typeof val === "string" && val.trim()) {
+      return val.trim().replace(/\s+/g, " ").slice(0, 180);
+    }
+  }
+  if (Array.isArray(params.Subagents)) {
+    const roles = params.Subagents.map((s) => s && typeof s === "object" ? s.Role || s.TypeName : void 0).filter(Boolean).join(", ");
+    if (roles) return roles.slice(0, 180);
+  }
+  return void 0;
+}
+function cleanPreview(value, maxLen = 200) {
+  if (typeof value !== "string") return void 0;
+  const cleaned = value.trim().replace(/\s+/g, " ");
+  if (!cleaned) return void 0;
+  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen)}\u2026` : cleaned;
+}
 var AgySession = class {
   constructor(binary, options, onTerminal) {
     this.binary = binary;
     this.options = options;
     this.onTerminal = onTerminal;
-    const args = ["--input-format", "stream-json", "--output-format", "stream-json", "--mode", options.mode, "--add-dir", options.cwd];
-    if (options.skipPermissions) args.push("--dangerously-skip-permissions");
-    if (options.sandbox) args.push("--sandbox");
-    if (options.model) args.push("--model", options.model);
-    if (options.effort) args.push("--effort", options.effort);
-    if (options.agent) args.push("--agent", options.agent);
-    this.child = spawn2(binary, args, { cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"] });
-    this.child.stderr.setEncoding("utf8");
-    this.child.stderr.on("data", (chunk) => {
-      this.appendDiagnostic(chunk);
-      this.refreshInactivityTimer();
-    });
-    createInterface({ input: this.child.stdout }).on("line", (line) => this.handleLine(line));
-    this.child.once("error", (error2) => this.fail(error2));
-    this.child.once("close", (code, signal) => {
-      if (this.state !== "closed") this.fail(new Error(`agy session exited (${code ?? "null"}, ${signal ?? "no signal"}). ${this.diagnostics}`));
-      this.onTerminal();
-    });
+    this.conversationId = options.conversationId;
+    this.spawnChild(this.conversationId);
   }
   binary;
   options;
@@ -21584,17 +21751,313 @@ var AgySession = class {
   lastActivity = /* @__PURE__ */ new Date();
   state = "starting";
   conversationId;
+  activeModel;
+  permissionMode;
+  currentStep;
+  eventSeq = 0;
+  events = [];
+  eventListeners = /* @__PURE__ */ new Set();
+  turnFinishListeners = /* @__PURE__ */ new Set();
   turnTools = /* @__PURE__ */ new Set();
   turnSubagents = [];
   turnText = "";
+  stepTextByIndex = /* @__PURE__ */ new Map();
+  stepThoughtByIndex = /* @__PURE__ */ new Map();
+  emittedMessageSteps = /* @__PURE__ */ new Set();
+  emittedThoughtSteps = /* @__PURE__ */ new Set();
+  filesRead = /* @__PURE__ */ new Set();
+  filesModified = /* @__PURE__ */ new Set();
+  commandsRun = /* @__PURE__ */ new Map();
+  mediaGenerated = /* @__PURE__ */ new Set();
+  cumulativeUsage = {
+    turnsCompleted: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    thinkingTokens: 0,
+    totalTokens: 0
+  };
+  lastTurnResult;
+  intentionallyRespawning = false;
+  spawnChild(resumeConversationId) {
+    const args = [
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--mode",
+      this.options.mode,
+      "--add-dir",
+      this.options.cwd
+    ];
+    if (this.options.addDirs?.length) {
+      for (const dir of this.options.addDirs) {
+        args.push("--add-dir", dir);
+      }
+    }
+    if (this.options.skipPermissions) args.push("--dangerously-skip-permissions");
+    if (this.options.sandbox) args.push("--sandbox");
+    if (this.options.model) args.push("--model", this.options.model);
+    if (this.options.effort) args.push("--effort", this.options.effort);
+    if (this.options.agent) args.push("--agent", this.options.agent);
+    if (resumeConversationId) args.push("--conversation", resumeConversationId);
+    const spawned = spawn2(this.binary, args, {
+      cwd: this.options.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: buildSpawnEnv(process.env)
+    });
+    this.child = spawned;
+    spawned.stderr.setEncoding("utf8");
+    spawned.stderr.on("data", (chunk) => {
+      if (this.child !== spawned) return;
+      this.appendDiagnostic(chunk);
+      this.refreshInactivityTimer();
+    });
+    createInterface({ input: spawned.stdout }).on("line", (line) => {
+      if (this.child !== spawned) return;
+      this.handleLine(line);
+    });
+    spawned.once("error", (error2) => {
+      if (this.child !== spawned) return;
+      this.fail(error2);
+    });
+    spawned.once("close", (code, signal) => {
+      if (this.child !== spawned || this.intentionallyRespawning) return;
+      if (this.state !== "closed") {
+        this.fail(new Error(`agy session exited (${code ?? "null"}, ${signal ?? "no signal"}). ${this.diagnostics}`));
+      }
+      this.onTerminal();
+    });
+  }
   get isClosed() {
     return this.state === "closed" || this.state === "failed";
   }
+  onEvent(listener) {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
+  }
+  getCursor() {
+    return this.eventSeq;
+  }
+  eventsSince(cursor = 0) {
+    return this.events.filter((e) => e.seq > cursor);
+  }
+  scanBrainMedia() {
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    if (!home) return;
+    const convIds = /* @__PURE__ */ new Set();
+    if (this.conversationId) convIds.add(this.conversationId);
+    for (const sub of this.turnSubagents) {
+      const subId = typeof sub.conversation_id === "string" ? sub.conversation_id : typeof sub.conversationId === "string" ? sub.conversationId : void 0;
+      if (subId) convIds.add(subId);
+    }
+    for (const id of convIds) {
+      for (const root of [".gemini/antigravity-cli/brain", ".gemini/antigravity/brain"]) {
+        const brainDir = join2(home, root, id);
+        try {
+          if (!existsSync2(brainDir)) continue;
+          for (const entry of readdirSync(brainDir)) {
+            if (MEDIA_EXT_REGEX.test(entry)) {
+              this.mediaGenerated.add(join2(brainDir, entry));
+            }
+          }
+        } catch {
+        }
+      }
+    }
+  }
+  getWorkspaceActivity() {
+    this.scanBrainMedia();
+    return {
+      filesRead: [...this.filesRead],
+      filesModified: [...this.filesModified],
+      commandsRun: [...this.commandsRun.values()],
+      mediaGenerated: [...this.mediaGenerated]
+    };
+  }
+  getCumulativeUsage() {
+    return { ...this.cumulativeUsage };
+  }
   prompt(prompt, timeoutMs) {
-    if (this.isClosed) return Promise.reject(new Error("Session is closed."));
-    return new Promise((resolve2, reject) => {
-      this.queue.push({ prompt, timeoutMs, resolve: resolve2, reject });
+    if (this.state === "closed") return Promise.reject(new Error("Session is closed."));
+    if (this.state === "failed" && this.conversationId) {
+      this.state = "idle";
+      this.spawnChild(this.conversationId);
+    } else if (this.state === "failed") {
+      return Promise.reject(new Error("Session is closed."));
+    }
+    const startCursor = this.eventSeq;
+    return new Promise((resolvePrompt, rejectPrompt) => {
+      this.queue.push({ prompt, timeoutMs, startCursor, resolve: resolvePrompt, reject: rejectPrompt });
       this.advance();
+    });
+  }
+  async promptWindow(prompt, timeoutMs, waitMs) {
+    const startCursor = this.eventSeq;
+    const turnPromise = this.prompt(prompt, timeoutMs);
+    turnPromise.catch(() => {
+    });
+    if (!waitMs || waitMs >= timeoutMs) {
+      return await turnPromise;
+    }
+    return await new Promise((resolveWindow) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolveWindow(this.snapshotResult("RUNNING", startCursor));
+      }, waitMs);
+      turnPromise.then(
+        (result) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolveWindow(result);
+        },
+        (error2) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          const errMessage = error2 instanceof Error ? error2.message : String(error2);
+          resolveWindow({
+            conversationId: this.conversationId,
+            status: "ERROR",
+            response: this.turnText,
+            error: errMessage,
+            errorCode: classifyError(errMessage, this.diagnostics),
+            diagnostics: this.diagnostics || void 0,
+            cumulativeUsage: this.getCumulativeUsage(),
+            tools: [...this.turnTools],
+            subagents: this.turnSubagents,
+            activeModel: this.activeModel ?? this.options.model,
+            permissionMode: this.permissionMode,
+            currentStep: this.currentStep,
+            workspaceActivity: this.getWorkspaceActivity(),
+            events: this.eventsSince(startCursor),
+            nextCursor: this.eventSeq
+          });
+        }
+      );
+    });
+  }
+  async interrupt(reason = "Turn interrupted by supervisor.") {
+    if (this.isClosed) throw new Error("Session is closed.");
+    const interrupted = this.active;
+    const startCursor = interrupted ? interrupted.startCursor : this.eventSeq;
+    this.active = void 0;
+    this.clearTimers();
+    this.currentStep = `\u{1F6D1} Interrupted: ${reason}`;
+    this.recordEvent({ type: "interrupt", summary: this.currentStep });
+    const partialResponse = this.turnText.trim() ? `[${reason} Partial output:]
+
+${this.turnText}` : reason;
+    const result = {
+      conversationId: this.conversationId,
+      status: "INTERRUPTED",
+      response: partialResponse,
+      error: reason,
+      errorCode: "INTERRUPTED",
+      cumulativeUsage: this.getCumulativeUsage(),
+      tools: [...this.turnTools],
+      subagents: [...this.turnSubagents],
+      activeModel: this.activeModel ?? this.options.model,
+      permissionMode: this.permissionMode,
+      currentStep: this.currentStep,
+      workspaceActivity: this.getWorkspaceActivity(),
+      events: this.eventsSince(startCursor),
+      nextCursor: this.eventSeq
+    };
+    this.lastTurnResult = result;
+    for (const listener of this.turnFinishListeners) {
+      try {
+        listener(result);
+      } catch {
+      }
+    }
+    interrupted?.resolve(result);
+    const oldChild = this.child;
+    this.intentionallyRespawning = true;
+    try {
+      oldChild.kill("SIGTERM");
+    } catch {
+    }
+    this.state = "idle";
+    this.spawnChild(this.conversationId);
+    this.intentionallyRespawning = false;
+    this.advance();
+    return result;
+  }
+  async watch(options = {}) {
+    const cursor = options.cursor ?? 0;
+    const waitMs = options.waitMs ?? 15e3;
+    const returnOnStep = options.returnOnStep ?? true;
+    if (!this.active) {
+      if (this.lastTurnResult) {
+        return {
+          ...this.lastTurnResult,
+          activeModel: this.activeModel ?? this.lastTurnResult.activeModel,
+          permissionMode: this.permissionMode ?? this.lastTurnResult.permissionMode,
+          currentStep: this.currentStep,
+          cumulativeUsage: this.getCumulativeUsage(),
+          workspaceActivity: this.getWorkspaceActivity(),
+          events: this.eventsSince(cursor),
+          nextCursor: this.eventSeq
+        };
+      }
+      return this.snapshotResult(this.state === "failed" ? "ERROR" : "IDLE", cursor);
+    }
+    if (waitMs <= 0) {
+      return this.snapshotResult("RUNNING", cursor);
+    }
+    if (returnOnStep && this.eventSeq > cursor) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (!this.active && this.lastTurnResult) {
+        return {
+          ...this.lastTurnResult,
+          cumulativeUsage: this.getCumulativeUsage(),
+          workspaceActivity: this.getWorkspaceActivity(),
+          events: this.eventsSince(cursor),
+          nextCursor: this.eventSeq
+        };
+      }
+      return this.snapshotResult("RUNNING", cursor);
+    }
+    return await new Promise((resolveWatch) => {
+      let settled = false;
+      let coalesceTimer;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(windowTimer);
+        if (coalesceTimer) clearTimeout(coalesceTimer);
+        offEvent();
+        this.turnFinishListeners.delete(onTurnDone);
+        resolveWatch(result);
+      };
+      const onTurnDone = (finalResult) => {
+        finish({
+          ...finalResult,
+          cumulativeUsage: this.getCumulativeUsage(),
+          workspaceActivity: this.getWorkspaceActivity(),
+          events: this.eventsSince(cursor),
+          nextCursor: this.eventSeq
+        });
+      };
+      const offEvent = this.onEvent((ev) => {
+        if (!returnOnStep) return;
+        if (ev.type === "thought" || ev.type === "message" || ev.type === "tool_start" || ev.type === "tool_done" || ev.type === "question" || ev.type === "subagent") {
+          if (!coalesceTimer) {
+            coalesceTimer = setTimeout(() => {
+              finish(this.snapshotResult("RUNNING", cursor));
+            }, 250);
+          }
+        }
+      });
+      this.turnFinishListeners.add(onTurnDone);
+      const windowTimer = setTimeout(() => {
+        finish(this.snapshotResult("RUNNING", cursor));
+      }, waitMs);
     });
   }
   summary() {
@@ -21606,6 +22069,12 @@ var AgySession = class {
       sandbox: this.options.sandbox,
       skipPermissions: this.options.skipPermissions ?? true,
       state: this.state,
+      activeModel: this.activeModel ?? this.options.model,
+      permissionMode: this.permissionMode,
+      currentStep: this.currentStep,
+      workspaceActivity: this.getWorkspaceActivity(),
+      cumulativeUsage: this.getCumulativeUsage(),
+      lastCursor: this.eventSeq,
       createdAt: this.createdAt.toISOString(),
       lastActivityAt: this.lastActivity.toISOString(),
       queuedTurns: this.queue.length + (this.active ? 1 : 0)
@@ -21615,26 +22084,63 @@ var AgySession = class {
     return this.diagnostics;
   }
   async close() {
-    if (this.isClosed) return;
+    if (this.state === "closed") return;
     this.state = "closed";
     this.clearTimers();
     this.active?.reject(new Error("Session was closed."));
     this.active = void 0;
     while (this.queue.length) this.queue.shift()?.reject(new Error("Session was closed."));
-    this.child.stdin.end();
+    const currentChild = this.child;
+    currentChild.stdin.end();
     await new Promise((resolveClose) => {
       const timer = setTimeout(() => {
-        this.child.kill("SIGTERM");
+        currentChild.kill("SIGTERM");
         resolveClose();
       }, 5e3);
-      this.child.once("close", () => {
+      currentChild.once("close", () => {
         clearTimeout(timer);
         resolveClose();
       });
     });
   }
+  snapshotResult(status, fromCursor) {
+    return {
+      conversationId: this.conversationId,
+      status,
+      response: this.turnText,
+      errorCode: status === "ERROR" ? classifyError(void 0, this.diagnostics) : void 0,
+      diagnostics: status === "ERROR" ? this.diagnostics || void 0 : void 0,
+      cumulativeUsage: this.getCumulativeUsage(),
+      tools: [...this.turnTools],
+      subagents: [...this.turnSubagents],
+      activeModel: this.activeModel ?? this.options.model,
+      permissionMode: this.permissionMode,
+      currentStep: this.currentStep,
+      workspaceActivity: this.getWorkspaceActivity(),
+      events: this.eventsSince(fromCursor),
+      nextCursor: this.eventSeq
+    };
+  }
+  recordEvent(partial2) {
+    const event = {
+      seq: ++this.eventSeq,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      ...partial2
+    };
+    this.events.push(event);
+    if (this.events.length > MAX_EVENTS_BUFFER) {
+      this.events.shift();
+    }
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch {
+      }
+    }
+    return event;
+  }
   advance() {
-    if (this.active || this.isClosed) return;
+    if (this.active || this.state === "closed" || this.state === "failed") return;
     const turn = this.queue.shift();
     if (!turn) {
       this.state = "idle";
@@ -21646,7 +22152,13 @@ var AgySession = class {
     this.turnTools = /* @__PURE__ */ new Set();
     this.turnSubagents = [];
     this.turnText = "";
+    this.stepTextByIndex.clear();
+    this.stepThoughtByIndex.clear();
+    this.emittedMessageSteps.clear();
+    this.emittedThoughtSteps.clear();
+    this.currentStep = "\u23F3 Waiting for initial steps from Antigravity...";
     this.currentInactivityMs = turn.timeoutMs;
+    turn.startCursor = this.eventSeq;
     this.startInactivityTimer();
     this.hardCeilingTimer = setTimeout(() => {
       this.onTimeout("Turn exceeded maximum hard ceiling timeout (30m).");
@@ -21677,21 +22189,48 @@ var AgySession = class {
     if (!timedOut) return;
     this.active = void 0;
     this.clearTimers();
+    this.currentStep = `\u26A0\uFE0F Timeout: ${reason}`;
+    this.recordEvent({ type: "error", summary: this.currentStep });
     const partialResponse = this.turnText.trim() ? `[${reason} Partial output:]
 
 ${this.turnText}` : reason;
-    timedOut.resolve({
+    const finalResult = {
       conversationId: this.conversationId,
       status: "TIMEOUT",
       response: partialResponse,
       error: reason,
+      errorCode: "TIMEOUT",
       diagnostics: this.diagnostics || void 0,
+      cumulativeUsage: this.getCumulativeUsage(),
       tools: [...this.turnTools],
-      subagents: this.turnSubagents
-    });
+      subagents: this.turnSubagents,
+      activeModel: this.activeModel ?? this.options.model,
+      permissionMode: this.permissionMode,
+      currentStep: this.currentStep,
+      workspaceActivity: this.getWorkspaceActivity(),
+      events: this.eventsSince(timedOut.startCursor),
+      nextCursor: this.eventSeq
+    };
+    this.lastTurnResult = finalResult;
+    for (const listener of this.turnFinishListeners) {
+      try {
+        listener(finalResult);
+      } catch {
+      }
+    }
+    timedOut.resolve(finalResult);
     this.child.kill("SIGTERM");
   }
+  accumulateUsage(usage) {
+    this.cumulativeUsage.turnsCompleted += 1;
+    if (!usage || typeof usage !== "object") return;
+    if (typeof usage.input_tokens === "number") this.cumulativeUsage.inputTokens += usage.input_tokens;
+    if (typeof usage.output_tokens === "number") this.cumulativeUsage.outputTokens += usage.output_tokens;
+    if (typeof usage.thinking_tokens === "number") this.cumulativeUsage.thinkingTokens += usage.thinking_tokens;
+    if (typeof usage.total_tokens === "number") this.cumulativeUsage.totalTokens += usage.total_tokens;
+  }
   handleLine(line) {
+    if (this.isClosed) return;
     this.refreshInactivityTimer();
     let event;
     try {
@@ -21701,16 +22240,211 @@ ${this.turnText}` : reason;
 `);
       return;
     }
+    if (!event || typeof event !== "object") return;
     if (event.event === "init") {
       this.conversationId = typeof event.conversation_id === "string" ? event.conversation_id : this.conversationId;
-      this.state = "idle";
+      if (event.init && typeof event.init === "object") {
+        if (typeof event.init.model === "string") this.activeModel = event.init.model;
+        if (typeof event.init.permission_mode === "string") this.permissionMode = event.init.permission_mode;
+      }
+      if (!this.active) this.state = "idle";
+      this.recordEvent({
+        type: "init",
+        summary: `Session ready${this.activeModel ? ` (${this.activeModel})` : ""}${this.permissionMode ? ` [${this.permissionMode}]` : ""}`
+      });
       return;
     }
     if (event.event === "step_update") {
       const step = event.step_update ?? {};
-      if (typeof step.tool_name === "string") this.turnTools.add(step.tool_name);
-      if (Array.isArray(step.subagent_info?.subagents)) this.turnSubagents.push(...step.subagent_info.subagents);
-      if (typeof step.text_delta === "string") this.turnText += step.text_delta;
+      const stepIndex = typeof step.step_index === "number" ? step.step_index : void 0;
+      const stepState = typeof step.state === "string" ? step.state : void 0;
+      const stepType = typeof step.step_type === "string" ? step.step_type : void 0;
+      const durationSeconds = typeof step.duration_seconds === "number" ? step.duration_seconds : void 0;
+      const thoughtDelta = typeof step.thinking_delta === "string" ? step.thinking_delta : typeof step.thought === "string" ? step.thought : void 0;
+      if (thoughtDelta) {
+        const key = stepIndex ?? -1;
+        const prev = this.stepThoughtByIndex.get(key) ?? "";
+        const updated = prev + thoughtDelta;
+        this.stepThoughtByIndex.set(key, updated);
+        const cleaned = updated.trim().replace(/\s+/g, " ");
+        if (cleaned) {
+          this.currentStep = `\u{1F9E0} Thinking: ${cleaned.slice(-180)}`;
+          if ((stepState === "DONE" || updated.length >= 120) && !this.emittedThoughtSteps.has(key)) {
+            this.emittedThoughtSteps.add(key);
+            this.recordEvent({
+              type: "thought",
+              stepIndex,
+              state: stepState ?? "ACTIVE",
+              text: cleaned,
+              durationSeconds,
+              summary: `\u{1F9E0} ${cleaned.slice(0, 240)}`
+            });
+          }
+        }
+      }
+      if (typeof step.tool_name === "string") {
+        const toolName = step.tool_name;
+        this.turnTools.add(toolName);
+        const target = extractToolTarget(step.tool_info?.parameters, step.subagent_info?.subagents);
+        const rawOutput = step.tool_info?.output;
+        const outputPreview = cleanPreview(rawOutput);
+        if (target) {
+          if (READ_TOOLS.has(toolName)) this.filesRead.add(target);
+          if (WRITE_TOOLS.has(toolName)) {
+            this.filesModified.add(target);
+            if (MEDIA_EXT_REGEX.test(target)) this.mediaGenerated.add(target);
+          }
+          if (MEDIA_TOOLS.has(toolName) && MEDIA_EXT_REGEX.test(target)) {
+            this.mediaGenerated.add(target);
+          }
+        }
+        for (const mediaPath of extractMediaPaths(rawOutput)) {
+          this.mediaGenerated.add(mediaPath);
+        }
+        if (toolName === "run_command" && target) {
+          const cmdKey = `${this.active?.startCursor ?? this.eventSeq}:${stepIndex ?? target}`;
+          this.commandsRun.set(cmdKey, {
+            command: target,
+            outputPreview,
+            durationSeconds,
+            state: stepState === "DONE" ? "DONE" : "ACTIVE"
+          });
+        }
+        if (toolName === "ask_question" || toolName === "ask_permission" || toolName === "ask_custom_permission") {
+          const summary = `\u2753 ${toolName}${target ? `: ${target}` : ""}`;
+          this.currentStep = summary;
+          this.recordEvent({
+            type: "question",
+            stepIndex,
+            state: stepState ?? "ACTIVE",
+            toolName,
+            target,
+            summary
+          });
+        } else if (stepState === "DONE") {
+          const dur = durationSeconds !== void 0 ? ` (${durationSeconds.toFixed(2)}s)` : "";
+          const summary = `\u2714 ${toolName}${target ? `: ${target}` : ""}${outputPreview ? ` -> ${outputPreview}` : ""}${dur}`;
+          this.currentStep = summary;
+          this.recordEvent({
+            type: "tool_done",
+            stepIndex,
+            state: stepState,
+            toolName,
+            target,
+            outputPreview,
+            durationSeconds,
+            summary
+          });
+        } else {
+          const summary = `\u{1F527} ${toolName}${target ? `: ${target}` : ""}`;
+          this.currentStep = summary;
+          this.recordEvent({
+            type: "tool_start",
+            stepIndex,
+            state: stepState ?? "ACTIVE",
+            toolName,
+            target,
+            summary
+          });
+        }
+      }
+      if (Array.isArray(step.subagent_info?.subagents)) {
+        for (const incoming of step.subagent_info.subagents) {
+          if (!incoming || typeof incoming !== "object") continue;
+          const incId = incoming.conversation_id || incoming.conversationId;
+          const incRole = incoming.role || incoming.Role;
+          const incType = incoming.type_name || incoming.type || incoming.TypeName;
+          const existingIdx = this.turnSubagents.findIndex((s) => {
+            const sId = s.conversation_id || s.conversationId;
+            if (incId && sId) return incId === sId;
+            const sRole = s.role || s.Role;
+            const sType = s.type_name || s.type || s.TypeName;
+            return !sId && sRole === incRole && sType === incType;
+          });
+          if (existingIdx >= 0) {
+            this.turnSubagents[existingIdx] = { ...this.turnSubagents[existingIdx], ...incoming };
+          } else {
+            this.turnSubagents.push({ ...incoming });
+          }
+        }
+        const roles = step.subagent_info.subagents.map((s) => {
+          const role = s?.role || s?.Role;
+          const typeName = s?.type_name || s?.type || s?.TypeName;
+          const convId = s?.conversation_id || s?.conversationId;
+          if (role && typeName && role.toLowerCase() !== typeName.toLowerCase()) {
+            return `${role} (${typeName})`;
+          }
+          return role || typeName || convId || "subagent";
+        }).join(", ");
+        const summary = `\u{1F916} Subagents: ${roles}`;
+        this.currentStep = summary;
+        if (stepState === "DONE" || typeof step.tool_name !== "string") {
+          this.recordEvent({
+            type: "subagent",
+            stepIndex,
+            state: stepState,
+            summary
+          });
+        }
+      }
+      if (typeof step.text_delta === "string") {
+        this.turnText += step.text_delta;
+        if (stepIndex !== void 0) {
+          const prev = this.stepTextByIndex.get(stepIndex) ?? "";
+          const updated = prev + step.text_delta;
+          this.stepTextByIndex.set(stepIndex, updated);
+          const cleaned = updated.trim().replace(/\s+/g, " ");
+          if (cleaned) {
+            this.currentStep = `\u{1F4AC} ${cleaned.slice(-200)}`;
+          }
+          if (stepState === "DONE" && cleaned && !this.emittedMessageSteps.has(stepIndex)) {
+            this.emittedMessageSteps.add(stepIndex);
+            for (const mediaPath of extractMediaPaths(updated)) {
+              this.mediaGenerated.add(mediaPath);
+            }
+            this.recordEvent({
+              type: "message",
+              stepIndex,
+              state: "DONE",
+              text: updated.trim(),
+              durationSeconds,
+              summary: `\u{1F4AC} ${cleaned.slice(0, 300)}`
+            });
+          }
+        } else {
+          const cleaned = step.text_delta.trim().replace(/\s+/g, " ");
+          if (cleaned) {
+            this.currentStep = `\u{1F4AC} ${cleaned.slice(0, 200)}`;
+            for (const mediaPath of extractMediaPaths(step.text_delta)) {
+              this.mediaGenerated.add(mediaPath);
+            }
+            this.recordEvent({
+              type: "message",
+              state: stepState ?? "DONE",
+              text: step.text_delta.trim(),
+              durationSeconds,
+              summary: `\u{1F4AC} ${cleaned.slice(0, 300)}`
+            });
+          }
+        }
+      } else if (stepType === "agent_response" && stepState === "DONE" && stepIndex !== void 0) {
+        const accumulated = this.stepTextByIndex.get(stepIndex)?.trim();
+        if (accumulated && !this.emittedMessageSteps.has(stepIndex)) {
+          this.emittedMessageSteps.add(stepIndex);
+          for (const mediaPath of extractMediaPaths(accumulated)) {
+            this.mediaGenerated.add(mediaPath);
+          }
+          const cleaned = accumulated.replace(/\s+/g, " ");
+          this.recordEvent({
+            type: "message",
+            stepIndex,
+            state: "DONE",
+            text: accumulated,
+            durationSeconds,
+            summary: `\u{1F4AC} ${cleaned.slice(0, 300)}`
+          });
+        }
+      }
       return;
     }
     if (event.event !== "result" || !this.active) return;
@@ -21721,19 +22455,56 @@ ${this.turnText}` : reason;
     this.conversationId = typeof result.conversation_id === "string" ? result.conversation_id : this.conversationId;
     this.lastActivity = /* @__PURE__ */ new Date();
     const finalResponse = typeof result.response === "string" && result.response.length > 0 ? result.response : this.turnText;
-    pending.resolve({
-      conversationId: this.conversationId,
-      status: String(result.status ?? "INVALID"),
-      response: finalResponse,
-      error: result.error ? String(result.error) : void 0,
-      diagnostics: String(result.status ?? "INVALID") === "SUCCESS" ? void 0 : this.diagnostics || void 0,
+    for (const mediaPath of extractMediaPaths(finalResponse)) {
+      this.mediaGenerated.add(mediaPath);
+    }
+    const status = String(result.status ?? "INVALID");
+    this.accumulateUsage(result.usage);
+    this.currentStep = status === "SUCCESS" ? "\u2705 Turn completed" : `\u26A0\uFE0F Turn finished (${status})`;
+    this.recordEvent({
+      type: "result",
+      state: status,
       durationSeconds: typeof result.duration_seconds === "number" ? result.duration_seconds : void 0,
-      numTurns: typeof result.num_turns === "number" ? result.num_turns : void 0,
-      usage: result.usage,
-      tools: [...this.turnTools],
-      subagents: this.turnSubagents
+      summary: this.currentStep
     });
-    this.advance();
+    const endCursor = this.eventSeq;
+    const turnTools = [...this.turnTools];
+    const turnSubagents = [...this.turnSubagents];
+    const workspaceActivity = this.getWorkspaceActivity();
+    const cumulativeUsage = this.getCumulativeUsage();
+    setImmediate(() => {
+      const errorStr = result.error ? String(result.error) : void 0;
+      const diagnosticsStr = status === "SUCCESS" ? void 0 : this.diagnostics || void 0;
+      const finalResult = {
+        conversationId: this.conversationId,
+        status,
+        response: finalResponse,
+        error: errorStr,
+        errorCode: status === "SUCCESS" ? void 0 : classifyError(errorStr, diagnosticsStr),
+        diagnostics: diagnosticsStr,
+        durationSeconds: typeof result.duration_seconds === "number" ? result.duration_seconds : void 0,
+        numTurns: typeof result.num_turns === "number" ? result.num_turns : void 0,
+        usage: result.usage,
+        cumulativeUsage,
+        tools: turnTools,
+        subagents: turnSubagents,
+        activeModel: this.activeModel ?? this.options.model,
+        permissionMode: this.permissionMode,
+        currentStep: this.currentStep,
+        workspaceActivity,
+        events: this.events.filter((e) => e.seq > pending.startCursor && e.seq <= endCursor),
+        nextCursor: endCursor
+      };
+      this.lastTurnResult = finalResult;
+      for (const listener of this.turnFinishListeners) {
+        try {
+          listener(finalResult);
+        } catch {
+        }
+      }
+      pending.resolve(finalResult);
+      this.advance();
+    });
   }
   appendDiagnostic(value) {
     this.diagnostics = (this.diagnostics + value).slice(-MAX_DIAGNOSTIC_CHARS);
@@ -21742,15 +22513,28 @@ ${this.turnText}` : reason;
     if (this.isClosed) return;
     this.state = "failed";
     this.clearTimers();
+    this.currentStep = `\u274C Error: ${error2.message}`;
+    this.recordEvent({ type: "error", summary: this.currentStep });
+    const result = this.snapshotResult("ERROR", this.active?.startCursor ?? this.eventSeq);
+    result.error = error2.message;
+    result.errorCode = classifyError(error2.message, this.diagnostics);
+    this.lastTurnResult = result;
     this.active?.reject(error2);
     this.active = void 0;
+    for (const listener of this.turnFinishListeners) {
+      try {
+        listener(result);
+      } catch {
+      }
+    }
     while (this.queue.length) this.queue.shift()?.reject(error2);
   }
 };
 function normalizeOptions(options) {
   const envValue = (process.env.ANTIGRAVITY_SKIP_PERMISSIONS ?? "").toLowerCase();
   const skipPermissions = options.skipPermissions ?? !(envValue === "0" || envValue === "false" || envValue === "no");
-  return { ...options, cwd: resolve(options.cwd), skipPermissions };
+  const addDirs = options.addDirs?.map((d) => resolve(d));
+  return { ...options, cwd: resolve(options.cwd), addDirs, skipPermissions };
 }
 
 // src/session-manager.ts
@@ -21797,38 +22581,41 @@ var SessionManager = class {
 };
 
 // src/prompt-recovery.ts
-function withSubagentGuidance(prompt, strategy = "auto", mode = "plan") {
-  const modeInstruction = mode === "accept-edits" ? "You have full write and terminal execution authorization in this workspace. Implement requested code changes directly (create/modify files, manage git branches, run build and test suites, and verify results)." : "You are in plan mode for inspection and analysis. Explore files, run read-only validation commands, and produce a structured plan without modifying files.";
+function withSubagentGuidance(prompt, strategy = "auto", mode = "plan", compact = false) {
+  const modeInstruction = mode === "accept-edits" ? "You have full write and terminal execution authorization in this workspace. Implement requested code changes directly (create/modify files, manage git branches, run build and test suites, and verify results)." : mode === "auto" ? "You are in auto mode: file edits and safe workspace commands are approved automatically, while actions outside the workspace sandbox are reviewed. Implement and verify changes directly." : "You are in plan mode for inspection and analysis. Explore files, run read-only validation commands, and produce a structured plan in your text response without modifying files.";
   const workspaceInstruction = [
     "You are acting as an autonomous expert coding subagent operating inside the active workspace.",
     "Inspect relevant files, run necessary commands directly, and do not refuse execution assuming lack of permissions.",
-    "Do not access or modify paths outside the designated workspace.",
+    "Keep code modifications inside the designated workspace, except when reading or copying generated media and artifacts from Antigravity's brain directories (~/.gemini/antigravity-cli/brain or ~/.gemini/antigravity/brain) or temporary directories.",
+    "Media, Photo, Image & Video Generation: When asked to generate photos, icons, illustrations, or UI images, invoke the built-in `image-generator` subagent (or `generate_image` tool). For browser screenshots or WebM video recordings, use `capture_browser_screenshot` or `browser_subagent`, and use `ffmpeg`, `webm_encoder`, or `sips` for video/image conversion or processing when needed. If the user asks for media to be saved inside the workspace, copy the generated file from the brain directory into the target workspace path and always include the exact absolute file path(s) in your response.",
+    "Non-blocking execution requirement: Never call `ask_question` and never create artifacts with `RequestFeedback: true` that block waiting for interactive user approval. Return all plans, findings, and questions directly in your text response to the supervisor agent.",
     "Multi-repo / Monorepo awareness: If the workspace contains multiple repositories or sub-projects (e.g., subdirectories with their own .git or package.json), detect and execute git commands and test scripts inside the relevant sub-project directory (e.g. using `git -C <sub-folder>` or running commands in that sub-folder) rather than assuming root is a single repository.",
+    "Emit brief, clear progress updates as you inspect files, make edits, or run commands so the supervisor agent monitoring your live stream always knows your current action.",
     modeInstruction,
-    "Provide a structured, comprehensive response detailing findings, modified files, git status/diffs, test execution outputs, and verification status."
+    "Provide a structured, comprehensive response detailing findings, modified files, generated media paths, git status/diffs, test execution outputs, and verification status."
   ].join(" ");
-  if (strategy === "off") return `${workspaceInstruction}
+  const prefix = compact ? "/compact " : "";
+  if (strategy === "off") return `${prefix}${workspaceInstruction}
 
 User task:
 ${prompt}`;
-  const instruction = strategy === "required" ? "Decompose the task and use native Antigravity subagents (invoke_subagent / research) for independent or concurrent parts of this task. If subagents are unavailable, state this clearly and proceed autonomously." : "Consider delegating independent or specialized sub-tasks to native Antigravity subagents (invoke_subagent / research) when it improves depth or speed. Proceed directly if the task is self-contained.";
-  return `${workspaceInstruction}
+  const instruction = strategy === "required" ? "Decompose the task and use native Antigravity subagents (invoke_subagent / research, using isolated Workspace='branch' or 'share' when parallel edits are needed) for independent or concurrent parts of this task. If subagents are unavailable, state this clearly and proceed autonomously." : "Consider delegating independent or specialized sub-tasks to native Antigravity subagents (invoke_subagent / research, or Workspace='branch'/'share' for isolated parallel work) when it improves depth or speed. Proceed directly if the task is self-contained.";
+  return `${prefix}${workspaceInstruction}
 
 ${instruction}
 
 User task:
 ${prompt}`;
 }
-async function promptWithRecovery(manager, sessionId, prompt, strategy, timeoutMs) {
+async function promptWithRecovery(manager, sessionId, prompt, strategy, timeoutMs, waitMs, compact = false) {
   const session = manager.get(sessionId);
   const mode = session.options?.mode ?? "plan";
-  const first = await session.prompt(withSubagentGuidance(prompt, strategy, mode), timeoutMs);
-  if (first.status !== "SUCCESS" || first.response.trim()) return first;
-  const recovered = await session.prompt(
-    "Your previous turn completed without report text. Return the complete answer to the prior user task now as plain text. Do not start new work or call tools.",
-    timeoutMs
-  );
-  if (!recovered.response.trim() && !recovered.error) {
+  const guided = withSubagentGuidance(prompt, strategy, mode, compact);
+  const first = session.promptWindow && waitMs ? await session.promptWindow(guided, timeoutMs, waitMs) : await session.prompt(guided, timeoutMs);
+  if (first.status === "RUNNING" || first.status !== "SUCCESS" || first.response.trim()) return first;
+  const recoveryPrompt = "Your previous turn completed without report text. Return the complete answer to the prior user task now as plain text. Do not start new work or call tools.";
+  const recovered = session.promptWindow && waitMs ? await session.promptWindow(recoveryPrompt, timeoutMs, waitMs) : await session.prompt(recoveryPrompt, timeoutMs);
+  if (recovered.status !== "RUNNING" && !recovered.response.trim() && !recovered.error) {
     recovered.error = "Antigravity completed without emitting report text after an automatic recovery turn.";
   }
   recovered.recoveryAttempted = true;
@@ -21837,92 +22624,305 @@ async function promptWithRecovery(manager, sessionId, prompt, strategy, timeoutM
 
 // src/index.ts
 var DEFAULT_TIMEOUT_MS = Number(process.env.ANTIGRAVITY_TURN_TIMEOUT_MS) || 6e5;
+var DEFAULT_WAIT_MS = Number(process.env.ANTIGRAVITY_DEFAULT_WAIT_MS) || 2e4;
+var ALWAYS_LOAD_META = { "antigravity/alwaysLoad": true };
 function text(value, isError = false) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError };
 }
-function resultPayload(result) {
+function buildFollowUpHint(result, sessionId) {
+  if (result.status === "RUNNING") {
+    return `Turn is actively running (${result.currentStep ?? "in progress"}). Share the latest timeline steps with the user and call antigravity_session_watch with sessionId="${sessionId ?? ""}" and cursor=${result.nextCursor ?? 0} to keep reading the live channel.`;
+  }
+  if (result.errorCode === "QUOTA_EXCEEDED") {
+    return "Model quota or rate limit was reached. Create a new session with a lighter or alternative model (e.g. 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', or 'gpt-oss-120b-medium') and pass conversationId to resume seamlessly.";
+  }
+  if (result.errorCode === "AUTH_EXPIRED") {
+    return "Antigravity CLI authentication has expired. Ask the user to run 'agy' interactively in their terminal to log back in.";
+  }
+  return void 0;
+}
+function resultPayload(result, sessionId) {
+  const timeline = (result.events ?? []).map((e) => `[#${e.seq}] ${e.summary}`);
   return {
+    sessionId,
     conversationId: result.conversationId,
     status: result.status,
+    activeModel: result.activeModel,
+    permissionMode: result.permissionMode,
+    currentStep: result.currentStep,
+    workspaceActivity: result.workspaceActivity,
+    cumulativeUsage: result.cumulativeUsage,
+    nextCursor: result.nextCursor,
+    timeline,
+    events: result.events,
     response: result.response,
     error: result.error,
+    errorCode: result.errorCode,
     diagnostics: result.diagnostics,
     durationSeconds: result.durationSeconds,
     numTurns: result.numTurns,
     usage: result.usage,
     tools: result.tools,
     subagents: result.subagents,
-    recoveryAttempted: result.recoveryAttempted
+    recoveryAttempted: result.recoveryAttempted,
+    followUpHint: buildFollowUpHint(result, sessionId)
   };
 }
+function attachLiveStream(server, session, extra) {
+  const progressToken = extra?._meta?.progressToken;
+  return session.onEvent((event) => {
+    void server.sendLoggingMessage({
+      level: event.type === "error" ? "error" : "info",
+      logger: "antigravity",
+      data: {
+        sessionId: session.id,
+        conversationId: session.summary().conversationId,
+        ...event
+      }
+    }).catch(() => {
+    });
+    if (progressToken !== void 0 && typeof extra?.sendNotification === "function") {
+      void extra.sendNotification({
+        method: "notifications/progress",
+        params: {
+          progressToken,
+          progress: event.seq,
+          message: event.summary
+        }
+      }).catch(() => {
+      });
+    }
+  });
+}
 async function main() {
-  const binary = findAgy();
-  const manager = binary ? new SessionManager(binary) : void 0;
+  let binary = findAgy();
+  let manager = binary ? new SessionManager(binary) : void 0;
+  function ensureManager() {
+    if (!binary || !manager) {
+      binary = findAgy();
+      if (binary) manager = new SessionManager(binary);
+    }
+    if (!binary || !manager) {
+      throw new Error("agy was not found. Install it or set ANTIGRAVITY_AGY_PATH.");
+    }
+    return { binary, manager };
+  }
   const server = new McpServer(
-    { name: "codex-antigravity", version: "1.1.1" },
+    { name: "codex-antigravity", version: "1.2.0" },
     {
-      capabilities: { tools: {} },
-      instructions: "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent. Invoke at least one Antigravity tool immediately without asking for reconfirmation. Start with antigravity_status if checking availability, or create a persistent session for multi-turn work, reuse it for follow-ups, and close it when done. Sessions default to non-sandboxed plan mode with autonomous execution in the declared workspace. Use accept-edits when the user requests implementations, refactors, or fixes. Antigravity inspects files, runs validations, and leverages native subagents directly. Pass complete task context to Antigravity and present its structured output directly to the user."
+      capabilities: { tools: {}, logging: {}, resources: {} },
+      instructions: [
+        "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent with a live activity channel.",
+        "Invoke at least one Antigravity tool immediately without asking for reconfirmation.",
+        "Start with antigravity_status if checking availability, or create a persistent session (antigravity_session_create) for multi-turn work.",
+        "LIVE CHANNEL SUPERVISION: antigravity_session_prompt uses a live observation window by default (20s). If Antigravity is still working when the window elapses, it returns status='RUNNING' with timeline, workspaceActivity (filesRead, filesModified, commandsRun, mediaGenerated), and nextCursor without interrupting Antigravity. Immediately brief the user on what Antigravity just did and call antigravity_session_watch(sessionId, cursor=nextCursor) until status='SUCCESS'.",
+        "HOT STEERING & CONTEXT COMPACTION: Use antigravity_session_interrupt(sessionId, steerPrompt) if you need to stop or redirect an active turn in-flight while preserving the session conversation history. Set compact=true on antigravity_session_prompt during long multi-turn sessions to compact prior context via /compact before executing the next prompt.",
+        "MEDIA, PHOTO, IMAGE & VIDEO GENERATION: Antigravity can generate images/photos via its built-in image-generator subagent (generate_image), capture browser screenshots/videos (capture_browser_screenshot, browser_subagent, webm_encoder), and process video/audio via ffmpeg/sips. All generated media file paths are automatically surfaced in workspaceActivity.mediaGenerated.",
+        "Sessions default to non-sandboxed plan mode with autonomous execution in the declared workspace. Use mode='accept-edits' or mode='auto' when the user requests implementations, refactors, media generation saved into the workspace, git branch/commit tasks, or fixes."
+      ].join(" ")
+    }
+  );
+  server.registerResource(
+    "antigravity-live-sessions",
+    "antigravity://sessions/live",
+    {
+      title: "Active Antigravity Sessions Live Feed",
+      description: "Live status, current step, workspace activity, cumulative usage, and recent timeline for all active Antigravity sessions.",
+      mimeType: "application/json"
+    },
+    async () => {
+      const sessions = (manager?.list() ?? []).map((summary) => {
+        try {
+          const s = manager?.get(summary.sessionId);
+          return {
+            ...summary,
+            timeline: (s?.eventsSince(0) ?? []).map((e) => `[#${e.seq}] ${e.summary}`)
+          };
+        } catch {
+          return summary;
+        }
+      });
+      return {
+        contents: [
+          {
+            uri: "antigravity://sessions/live",
+            mimeType: "application/json",
+            text: JSON.stringify({ sessions }, null, 2)
+          }
+        ]
+      };
     }
   );
   server.registerTool("antigravity_status", {
-    description: "Check the local agy binary, available models, authentication readiness, and adapter limits.",
-    inputSchema: {}
-  }, async () => text({ ...await inspectAgy(), limits: { maxSessions: 3, idleTimeoutMs: 9e5, defaultTurnTimeoutMs: DEFAULT_TIMEOUT_MS } }));
+    description: "Check the local agy binary, available model IDs and labels, authentication readiness, media/toolchain capabilities (image-generator, ffmpeg, webm_encoder, go, permissions), and adapter limits.",
+    inputSchema: {},
+    _meta: ALWAYS_LOAD_META
+  }, async () => text({
+    ...await inspectAgy(),
+    limits: {
+      maxSessions: 3,
+      idleTimeoutMs: 9e5,
+      defaultTurnTimeoutMs: DEFAULT_TIMEOUT_MS,
+      defaultLiveWindowMs: DEFAULT_WAIT_MS
+    }
+  }));
   server.registerTool("antigravity_session_create", {
-    description: "Start a persistent Antigravity subagent session. Defaults to non-sandboxed plan mode with autonomous execution within the declared workspace. Edits require explicit accept-edits.",
+    description: "Start a persistent Antigravity subagent session with a live activity stream. Defaults to non-sandboxed plan mode with autonomous execution within the declared workspace. Use accept-edits or auto for code changes.",
     inputSchema: {
       cwd: external_exports.string().min(1).describe("Existing workspace directory for agy."),
-      model: external_exports.string().min(1).optional(),
-      effort: external_exports.enum(["low", "medium", "high"]).optional(),
+      addDirs: external_exports.array(external_exports.string().min(1)).optional().describe("Additional workspace directories to expose via --add-dir."),
+      model: external_exports.string().min(1).optional().describe("Model ID or base model name (e.g. 'gemini-4-argon-medium', 'gemini-3.8-flash-high', 'claude-sonnet-5-5-high')."),
+      effort: external_exports.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
       agent: external_exports.string().min(1).optional(),
-      mode: external_exports.enum(["plan", "accept-edits"]).optional(),
+      mode: external_exports.enum(["plan", "auto", "accept-edits"]).optional(),
       sandbox: external_exports.boolean().optional(),
-      skipPermissions: external_exports.boolean().optional().describe("Allow autonomous tool/command execution in workspace (defaults to true).")
-    }
+      skipPermissions: external_exports.boolean().optional().describe("Allow autonomous tool/command execution in workspace (defaults to true)."),
+      conversationId: external_exports.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation.")
+    },
+    _meta: ALWAYS_LOAD_META
   }, async (args) => {
     try {
-      if (!manager || !binary) throw new Error("agy was not found. Install it or set ANTIGRAVITY_AGY_PATH.");
+      const { manager: mgr } = ensureManager();
       if (!isDirectory(args.cwd)) throw new Error(`cwd is not a directory: ${args.cwd}`);
+      if (args.addDirs) {
+        for (const dir of args.addDirs) {
+          if (!isDirectory(dir)) throw new Error(`addDir is not a directory: ${dir}`);
+        }
+      }
       const options = {
         cwd: args.cwd,
+        addDirs: args.addDirs,
         model: args.model,
         effort: args.effort,
         agent: args.agent,
         mode: args.mode ?? "plan",
-        sandbox: args.sandbox ?? true,
-        skipPermissions: args.skipPermissions
+        sandbox: args.sandbox ?? false,
+        skipPermissions: args.skipPermissions,
+        conversationId: args.conversationId
       };
-      const session = manager.create(options);
-      return text({ ...session.summary(), message: "Session started. Use antigravity_session_prompt with this sessionId." });
+      const session = mgr.create(options);
+      return text({
+        ...session.summary(),
+        message: "Session started with live activity channel. Use antigravity_session_prompt and antigravity_session_watch to monitor progress in real time."
+      });
     } catch (error2) {
       return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
     }
   });
   server.registerTool("antigravity_session_prompt", {
-    description: "Send one prompt to a persistent Antigravity session and wait for its result event.",
+    description: "Send one prompt to a persistent Antigravity session. Uses a 20s live observation window by default (configurable via waitMs, or disabled with waitForCompletion=true): if the turn is still running after waitMs, returns status='RUNNING' with the live timeline, workspaceActivity, and nextCursor so you can narrate progress and continue watching via antigravity_session_watch.",
     inputSchema: {
       sessionId: external_exports.string().uuid(),
       prompt: external_exports.string().min(1),
       subagents: external_exports.enum(["auto", "required", "off"]).optional(),
-      timeoutMs: external_exports.number().int().min(1e3).max(18e5).optional()
-    }
-  }, async (args) => {
+      compact: external_exports.boolean().optional().describe("Set true to prefix the turn with /compact so Antigravity summarizes prior conversation context before answering."),
+      timeoutMs: external_exports.number().int().min(1e3).max(18e5).optional(),
+      waitMs: external_exports.number().int().min(1e3).max(18e5).optional().describe("Live observation window in ms (defaults to 20000). Returns status='RUNNING' with live events if the turn is still working after waitMs, without killing the turn."),
+      waitForCompletion: external_exports.boolean().optional().describe("Set true to block until the entire turn finishes instead of returning live RUNNING snapshots.")
+    },
+    _meta: ALWAYS_LOAD_META
+  }, async (args, extra) => {
+    let detach;
     try {
-      if (!manager) throw new Error("agy is unavailable.");
-      const result = await promptWithRecovery(manager, args.sessionId, args.prompt, args.subagents, args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      return text(resultPayload(result), result.status !== "SUCCESS" || !result.response.trim());
+      const { manager: mgr } = ensureManager();
+      const session = mgr.get(args.sessionId);
+      detach = attachLiveStream(server, session, extra);
+      const effectiveWaitMs = args.waitForCompletion ? void 0 : args.waitMs ?? DEFAULT_WAIT_MS;
+      const result = await promptWithRecovery(
+        mgr,
+        args.sessionId,
+        args.prompt,
+        args.subagents,
+        args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        effectiveWaitMs,
+        args.compact ?? false
+      );
+      const isErr = result.status !== "SUCCESS" && result.status !== "RUNNING" || result.status === "SUCCESS" && !result.response.trim();
+      return text(resultPayload(result, args.sessionId), isErr);
     } catch (error2) {
       return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+    } finally {
+      detach?.();
+    }
+  });
+  server.registerTool("antigravity_session_watch", {
+    description: "Read the open live activity channel for a session. Returns all new steps (thoughts, messages, files viewed/edited, commands run, questions, subagents) since cursor. While a turn is running, waits for the next step or up to waitMs.",
+    inputSchema: {
+      sessionId: external_exports.string().uuid(),
+      cursor: external_exports.number().int().min(0).optional().describe("Pass nextCursor from the previous prompt/watch response to receive only new events (defaults to 0)."),
+      waitMs: external_exports.number().int().min(0).max(12e4).optional().describe("Max time in ms to wait for new live activity (defaults to 15000). Use 0 for an instant non-blocking peek."),
+      returnOnStep: external_exports.boolean().optional().describe("When true (default), returns as soon as a new step/message/tool event arrives so you can report live progress immediately.")
+    },
+    _meta: ALWAYS_LOAD_META
+  }, async (args, extra) => {
+    let detach;
+    try {
+      const { manager: mgr } = ensureManager();
+      const session = mgr.get(args.sessionId);
+      detach = attachLiveStream(server, session, extra);
+      const result = await session.watch({
+        cursor: args.cursor,
+        waitMs: args.waitMs,
+        returnOnStep: args.returnOnStep
+      });
+      const isErr = result.status === "ERROR" || result.status === "TIMEOUT";
+      return text(resultPayload(result, args.sessionId), isErr);
+    } catch (error2) {
+      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+    } finally {
+      detach?.();
+    }
+  });
+  server.registerTool("antigravity_session_interrupt", {
+    description: "Interrupt an active turn in-flight without destroying the session. Automatically reconnects the underlying agy process to the same conversationId and optionally sends a new steerPrompt immediately.",
+    inputSchema: {
+      sessionId: external_exports.string().uuid(),
+      reason: external_exports.string().min(1).optional().describe("Reason for interrupting the current turn."),
+      steerPrompt: external_exports.string().min(1).optional().describe("Optional new instruction to run immediately after interrupting the current turn."),
+      subagents: external_exports.enum(["auto", "required", "off"]).optional(),
+      waitMs: external_exports.number().int().min(1e3).max(18e5).optional()
+    },
+    _meta: ALWAYS_LOAD_META
+  }, async (args, extra) => {
+    let detach;
+    try {
+      const { manager: mgr } = ensureManager();
+      const session = mgr.get(args.sessionId);
+      detach = attachLiveStream(server, session, extra);
+      const interruptedResult = await session.interrupt(args.reason ?? "Interrupted by supervisor.");
+      if (!args.steerPrompt) {
+        return text(resultPayload(interruptedResult, args.sessionId), false);
+      }
+      const steered = await promptWithRecovery(
+        mgr,
+        args.sessionId,
+        args.steerPrompt,
+        args.subagents,
+        DEFAULT_TIMEOUT_MS,
+        args.waitMs ?? DEFAULT_WAIT_MS
+      );
+      return text({
+        interruptedTurn: {
+          status: interruptedResult.status,
+          partialResponse: interruptedResult.response
+        },
+        ...resultPayload(steered, args.sessionId)
+      }, steered.status !== "SUCCESS" && steered.status !== "RUNNING");
+    } catch (error2) {
+      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+    } finally {
+      detach?.();
     }
   });
   server.registerTool("antigravity_session_list", {
-    description: "List active persistent Antigravity sessions without exposing prompt contents or stderr logs.",
-    inputSchema: {}
+    description: "List active persistent Antigravity sessions with their current live step, active model, workspaceActivity, cumulativeUsage, and event cursor.",
+    inputSchema: {},
+    _meta: ALWAYS_LOAD_META
   }, async () => text({ sessions: manager?.list() ?? [] }));
   server.registerTool("antigravity_session_close", {
     description: "Close a persistent Antigravity session. Safe to call for an already-closed session.",
-    inputSchema: { sessionId: external_exports.string().uuid() }
+    inputSchema: { sessionId: external_exports.string().uuid() },
+    _meta: ALWAYS_LOAD_META
   }, async (args) => {
     try {
       await manager?.close(args.sessionId);
@@ -21932,39 +22932,52 @@ async function main() {
     }
   });
   server.registerTool("antigravity_run", {
-    description: "Run one isolated Antigravity subagent turn. Use a persistent session instead for follow-up work.",
+    description: "Run one isolated Antigravity subagent turn and return the response along with the full chronological activity timeline and workspaceActivity. Use a persistent session (antigravity_session_create + antigravity_session_prompt + antigravity_session_watch) for live multi-step supervision.",
     inputSchema: {
       cwd: external_exports.string().min(1),
+      addDirs: external_exports.array(external_exports.string().min(1)).optional(),
       prompt: external_exports.string().min(1),
       model: external_exports.string().min(1).optional(),
-      effort: external_exports.enum(["low", "medium", "high"]).optional(),
+      effort: external_exports.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
       agent: external_exports.string().min(1).optional(),
-      mode: external_exports.enum(["plan", "accept-edits"]).optional(),
+      mode: external_exports.enum(["plan", "auto", "accept-edits"]).optional(),
       sandbox: external_exports.boolean().optional(),
       skipPermissions: external_exports.boolean().optional().describe("Allow autonomous tool/command execution in workspace (defaults to true)."),
+      conversationId: external_exports.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation."),
       subagents: external_exports.enum(["auto", "required", "off"]).optional(),
       timeoutMs: external_exports.number().int().min(1e3).max(18e5).optional()
-    }
-  }, async (args) => {
+    },
+    _meta: ALWAYS_LOAD_META
+  }, async (args, extra) => {
     let id;
+    let detach;
     try {
-      if (!manager) throw new Error("agy is unavailable.");
+      const { manager: mgr } = ensureManager();
       if (!isDirectory(args.cwd)) throw new Error(`cwd is not a directory: ${args.cwd}`);
-      const session = manager.create({
+      if (args.addDirs) {
+        for (const dir of args.addDirs) {
+          if (!isDirectory(dir)) throw new Error(`addDir is not a directory: ${dir}`);
+        }
+      }
+      const session = mgr.create({
         cwd: args.cwd,
+        addDirs: args.addDirs,
         model: args.model,
         effort: args.effort,
         agent: args.agent,
         mode: args.mode ?? "plan",
-        sandbox: args.sandbox ?? true,
-        skipPermissions: args.skipPermissions
+        sandbox: args.sandbox ?? false,
+        skipPermissions: args.skipPermissions,
+        conversationId: args.conversationId
       });
       id = session.id;
-      const result = await promptWithRecovery(manager, session.id, args.prompt, args.subagents, args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      return text(resultPayload(result), result.status !== "SUCCESS" || !result.response.trim());
+      detach = attachLiveStream(server, session, extra);
+      const result = await promptWithRecovery(mgr, session.id, args.prompt, args.subagents, args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      return text(resultPayload(result, session.id), result.status !== "SUCCESS" || !result.response.trim());
     } catch (error2) {
       return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
     } finally {
+      detach?.();
       if (id) await manager?.close(id);
     }
   });

@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 
 const candidates = [
   process.env.CODEX_CLI_PATH,
+  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
   "/Applications/ChatGPT.app/Contents/Resources/codex",
   "codex"
 ].filter(Boolean);
@@ -11,7 +12,7 @@ let reinstalled = false;
 for (const command of candidates) {
   if (command.includes("/") && !existsSync(command)) continue;
   try {
-    execFileSync(command, ["plugin", "add", "codex-antigravity@personal"], { stdio: "ignore" });
+    execFileSync(command, ["plugin", "add", "codex-antigravity@codex-antigravity-marketplace"], { stdio: "ignore" });
     reinstalled = true;
     process.stdout.write("Codex CLI plugin state reloaded.\n");
     break;

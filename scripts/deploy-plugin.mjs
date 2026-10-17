@@ -22,6 +22,7 @@ try {
   writeFileSync(resolve(destination, ".mcp.json"), `${JSON.stringify({ mcpServers: { antigravity: { command: "./bin/run.sh", args: [], cwd: "." } } }, null, 2)}\n`);
   rmSync(backup, { recursive: true, force: true });
   console.log(`Installed plugin artifact at ${destination}`);
+
   console.log("Register this repository once in Codex Plugins; no global files were modified.");
 } catch (error) {
   rmSync(destination, { recursive: true, force: true });

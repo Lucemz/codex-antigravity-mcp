@@ -1,165 +1,137 @@
 # Codex Antigravity MCP (`codex-antigravity-mcp`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.1.1](https://img.shields.io/badge/version-1.1.1-green.svg)](package.json)
+[![Version: 1.2.0](https://img.shields.io/badge/version-1.2.0-green.svg)](package.json)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](package.json)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-purple.svg)](https://modelcontextprotocol.io)
 
-Plugin y servidor MCP para **Codex** (Desktop & CLI) que permite delegar tareas de ingeniería de software, refactorización, auditoría, creación de ramas git y ejecución de tests a **Google Antigravity CLI (`agy`)** como un subagente autónomo persistente potenciado por Gemini.
+Plugin and MCP server for **Codex** (Desktop & CLI) that delegates software engineering, refactoring, architectural auditing, git branch management, and test execution to **Google Antigravity CLI (`agy`)** as a persistent autonomous coding subagent with a real-time **Live Activity Channel**.
 
-## Versión 1.1.1
+## What's New in v1.2.0
 
-- Corrige la estructura del marketplace para Codex Desktop: `.agents/plugins/marketplace.json`.
-- Corrige la resolución del plugin local desde la raíz del marketplace.
-- Simplifica el launcher MCP para que Codex Desktop lo ejecute desde el paquete instalado.
-- Evita que el instalador local modifique configuraciones globales de Codex.
+- **Live Activity Channel (`antigravity_session_watch` + `waitMs`)**: Codex observes what `agy` is doing step by step in real time (reasoning thoughts, intermediate messages, files read/modified via `view_file` / `replace_file_content`, shell commands executed via `run_command`, and spawned subagents) with a default 20-second observation window that returns `status: "RUNNING"` snapshots without interrupting the turn.
+- **Hot Interrupt & Steering (`antigravity_session_interrupt`)**: Stop or redirect an active turn mid-flight while automatically reconnecting to the same `conversationId` via `--conversation`.
+- **Workspace Impact, Media & Token Tracking (`workspaceActivity` & `cumulativeUsage`)**: Every response reports exact `filesRead`, `filesModified`, `commandsRun`, `mediaGenerated` (photos, icons, screenshots, WebM/MP4 videos), and cumulative token consumption, plus on-demand context compaction (`compact: true` via `/compact`).
+- **Photo, Image, Screenshot & Video Generation Support**: Full support for `agy`'s built-in `image-generator` subagent (`generate_image`), browser screenshot/video capture (`capture_browser_screenshot`, `browser_subagent`, `webm_encoder`), and `ffmpeg` / `sips` / `go` PATH injection (`buildSpawnEnv`).
+- **Native MCP Real-Time Notifications & Eager Tool Loading**: Emits `notifications/progress` and `notifications/message` on every `step_update`, exposes `antigravity://sessions/live`, and marks all tools with `_meta: { "antigravity/alwaysLoad": true }`.
+- **Full `agy 1.4.0` Compatibility**:
+  - Supports `mode: "auto"` (in addition to `"plan"` and `"accept-edits"`).
+  - Supports reasoning `effort: "low" | "medium" | "high" | "xhigh" | "max"`.
+  - Supports multi-directory workspaces (`addDirs` via `--add-dir`), conversation resumption (`conversationId` via `--conversation`), and clean model catalog parsing (`modelDetails`).
 
 ---
 
-## 🚀 Guía de Instalación y Puesta en Marcha (Paso a Paso)
+## 🚀 Step-by-Step Setup Guide
 
-Sigue estos pasos en orden para dejar el plugin 100% operativo en tu equipo:
-
-### Paso 1: Instalar Node.js en tu equipo
-Si aún no tienes Node.js instalado:
+### Step 1: Install Node.js (v18+)
 - **macOS (Homebrew)**:
   ```sh
   brew install node
   ```
-- O descarga el instalador oficial desde [nodejs.org](https://nodejs.org) (versión 18 o superior).
+- Or download the official installer from [nodejs.org](https://nodejs.org).
 
----
-
-### Paso 2: Instalar y Autenticar Google Antigravity CLI (`agy`)
-El plugin utiliza la CLI oficial de Antigravity (`agy`) para comunicarse con los modelos de Gemini.
-
-1. Instala `agy` siguiendo la [documentación oficial de Antigravity](https://antigravity.google/docs/cli/reference) o mediante el instalador de Google Gemini.
-2. Abre tu **terminal** y ejecuta `agy` para iniciar sesión con tu cuenta de Google:
+### Step 2: Install and Authenticate Google Antigravity CLI (`agy`)
+1. Install `agy` following the [official Antigravity CLI documentation](https://antigravity.google/docs/cli/reference).
+2. Open your terminal, update to the latest version (`1.4.0+`), and sign in:
    ```sh
-   # 1. Verifica la versión
    agy --version
-
-   # 2. Inicia sesión interactivamente (solo se hace una vez)
+   agy update
    agy
-
-   # 3. Comprueba que los modelos respondan
    agy models
    ```
 
-> 💡 **Nota:** Si tienes `agy` instalado en una ruta personalizada fuera del estándar, puedes definir `export ANTIGRAVITY_AGY_PATH="/ruta/a/tu/agy"`.
+> 💡 **Note:** If `agy` is installed in a custom path outside `PATH`, set `export ANTIGRAVITY_AGY_PATH="/path/to/agy"`.
 
----
-
-### Paso 3: Clonar el Repositorio y Compilar con Node
-Antes de activar el plugin en Codex Desktop, descarga el proyecto e instálalo localmente por consola para que se generen los ejecutables y se registre la configuración:
-
+### Step 3: Clone, Build, and Install the Plugin Locally
 ```sh
-# 1. Clonar el repositorio
 git clone https://github.com/Lucemz/codex-antigravity-mcp.git
 cd codex-antigravity-mcp
-
-# 2. Instalar dependencias y compilar
 npm install
 npm run build
-
-# 3. Registrar el plugin localmente en Codex
 npm run install:plugin
 ```
 
----
-
-### Paso 4: Activar en Codex Desktop
-1. Abre **Codex Desktop**.
-2. Ve a la sección **Plugins** / **Marketplace**.
-3. Haz clic en **Add Marketplace / Add Repository** (Añadir Marketplace o repositorio).
-4. Pega la URL del repositorio:
+### Step 4: Enable in Codex Desktop
+1. Open **Codex Desktop**.
+2. Go to **Plugins** / **Marketplace**.
+3. Click **Add Marketplace / Add Repository** and enter:
    ```text
    https://github.com/Lucemz/codex-antigravity-mcp
    ```
-5. Haz clic en **Instalar / Install**.
-6. **Reinicia Codex Desktop (`Cmd + Q`)** o abre un **Nuevo Chat** para que las herramientas MCP se carguen en la sesión.
+4. Click **Install**.
+5. **Restart Codex Desktop (`Cmd + Q`)** or open a **New Chat** to load the MCP tools.
 
 ---
 
-## 🛠️ Herramientas MCP Disponibles (MCP Tools)
+## 🛠️ Available MCP Tools
 
-| Herramienta | Descripción |
+| Tool | Description |
 | :--- | :--- |
-| `antigravity_status` | Comprueba la disponibilidad de `agy`, modelos Gemini activos, estado de autenticación y límites. |
-| `antigravity_session_create` | Inicia una sesión multi-turno persistente en el directorio de trabajo (`cwd`). |
-| `antigravity_session_prompt` | Envía un prompt a una sesión persistente activa y espera la respuesta estructurada. |
-| `antigravity_session_list` | Lista las sesiones activas, su estado (`idle`/`running`) y turnos en cola. |
-| `antigravity_session_close` | Cierra y libera los procesos de una sesión persistente. |
-| `antigravity_run` | Ejecuta un turno aislado en Antigravity y cierra la sesión automáticamente. |
+| `antigravity_status` | Checks the local `agy` binary, version, clean `models` / `modelDetails` catalog, authentication state, and adapter limits. |
+| `antigravity_session_create` | Starts a persistent multi-turn session in `cwd` with a live activity channel. |
+| `antigravity_session_prompt` | Sends a prompt with a default `20s` live observation window (`waitMs`). Returns `status: "RUNNING"` + `timeline` + `workspaceActivity` + `nextCursor` if still working. |
+| `antigravity_session_watch` | Reads the open live channel from `cursor` and returns new steps (`thought`, `message`, `tool_start`, `tool_done`, `question`, `subagent`) in real time. |
+| `antigravity_session_interrupt` | Interrupts an active turn without destroying the session (reconnects via `--conversation`) and optionally runs a `steerPrompt` immediately. |
+| `antigravity_session_list` | Lists active sessions, state (`idle`/`running`), active model, `currentStep`, `workspaceActivity`, `cumulativeUsage`, and `lastCursor`. |
+| `antigravity_session_close` | Closes and releases a persistent session. |
+| `antigravity_run` | Runs a single isolated turn (returning the full `timeline` and `workspaceActivity`) and closes the session automatically. |
 
-### Parámetros Principales:
+### Key Parameters
 - `mode`:
-  - `"plan"`: Inspección y análisis en solo lectura (sin modificar archivos).
-  - `"accept-edits"`: Autorización completa para escribir archivos, crear ramas git y correr comandos.
-- `skipPermissions`: `true` (por defecto) para ejecución autónoma sin bloqueos interactivos.
-- `subagents`: `"auto"` (por defecto), `"required"`, o `"off"`.
-- `model`: ID opcional del modelo Gemini (ej. `gemini-3.7-flash-medium`, `gemini-3.8-flash-high`, `gemini-3.1-pro-high`).
+  - `"plan"`: Read-only inspection and architectural analysis (no file edits).
+  - `"auto"`: Automatically approves file edits and safe workspace commands while reviewing external actions.
+  - `"accept-edits"`: Full write and terminal execution authorization for code changes, git branches, and tests.
+- `waitMs`: Live observation window in milliseconds (default `20000`). If the turn is still running when `waitMs` elapses, returns a live snapshot (`status: "RUNNING"`, `currentStep`, `timeline`, `workspaceActivity`, `nextCursor`) without stopping `agy`.
+- `compact`: Set `true` to prefix the turn with `/compact` and summarize conversation history before executing the prompt.
+- `effort`: `"low" | "medium" | "high" | "xhigh" | "max"`.
+- `skipPermissions`: `true` (default) for autonomous non-blocking execution inside the workspace.
+- `subagents`: `"auto"` (default), `"required"`, or `"off"`.
+- `model`: Optional model ID in `agy 1.4.0` (e.g., `gemini-4-argon-medium`, `gemini-4-argon-high`, `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `claude-sonnet-5-5-high`, `claude-opus-5-5-high`, `gpt-oss-120b-medium`).
+- `conversationId`: Optional conversation ID to resume a prior conversation (`--conversation`).
 
 ---
 
-## 💡 Ejemplos de Uso desde Codex
+## 💡 Usage Examples in Codex
 
-En cualquier conversación de Codex, puedes invocar al plugin escribiendo:
-
-### 1. Verificar Estado y Conexión
+### 1. Check Status and Available Models
 ```text
-@Codex Antigravity ejecuta antigravity_status y dime qué modelos de Gemini están disponibles.
+@Codex Antigravity run antigravity_status and list the available models.
 ```
 
-### 2. Desarrollo Completo, Ramas y Tests (`accept-edits`)
+### 2. Full Feature Implementation with Live Channel Supervision (`accept-edits`)
 ```text
-@Codex Antigravity en /Users/usuario/proyectos/mi-app:
-Crea una sesión persistente en mode "accept-edits".
-1. Crea una rama git 'feature/nueva-funcionalidad'.
-2. Implementa los cambios solicitados en el código.
-3. Ejecuta los tests del proyecto.
-4. Si los tests pasan, haz commit y reporta el diff final.
+@Codex Antigravity in /Users/user/projects/my-app:
+Create a persistent session in mode "accept-edits".
+1. Create a git branch 'feature/live-channel'.
+2. Implement the requested code changes.
+3. Run the test suite and report live progress as Antigravity works.
 ```
 
-### 3. Auditoría Arquitectónica y Revisión (`plan`)
+### 3. Architectural Audit (`plan`)
 ```text
-@Codex Antigravity en /Users/usuario/proyectos/mi-app:
-Crea una sesión en mode "plan".
-Analiza la arquitectura del proyecto, detecta posibles mejoras y genera un plan estructurado sin modificar archivos.
+@Codex Antigravity in /Users/user/projects/my-app:
+Create a session in mode "plan".
+Audit the repository architecture, identify bottlenecks, and return a structured improvement plan without modifying files.
 ```
 
 ---
 
-## ❓ Preguntas Frecuentes (FAQ / Troubleshooting)
-
-### 1. ¿Por qué me sale `antigravity_... undefined` o no veo las herramientas?
-- **Solución:** En Codex Desktop, las herramientas MCP se cargan al iniciar una nueva conversación. Cierra la conversación actual y abre un **Nuevo Chat**, o reinicia la aplicación completamente con `Cmd + Q`.
-
-### 2. ¿Qué hacer si sale `agy was not found` o error de autenticación?
-- **Solución:** Abre tu terminal y corre `agy`. Si no has iniciado sesión en Google, el comando te guiará interactivamente para autenticar tu cuenta.
-
----
-
-## 🧪 Pruebas Automatizadas (Tests)
-
-El repositorio incluye pruebas unitarias para validar timeouts, heartbeats de inactividad y recuperación de respuestas:
+## 🧪 Automated Tests & Validation
 
 ```sh
 npm test
+npm run validate:plugin
 ```
 
 ---
 
-## 📄 Licencia
+## 🔄 Refreshing the Plugin in Codex
 
-Este proyecto es código abierto bajo la licencia [MIT](LICENSE).
-## Recuperar herramientas MCP en Codex
-
-Si el skill aparece pero no aparecen `antigravity_session_*`, elimina la instalación y el marketplace antiguos, actualiza la caché y reinstala una sola copia:
+If you update the repository and want to refresh Codex's marketplace cache from scratch:
 
 ```bash
-CODEX=/Applications/ChatGPT.app/Contents/Resources/codex
-REPO=/Users/fitzgeraldbendezu/projects/mcp-antigravity/codex-antigravity-mcp
+CODEX=/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex
+REPO=/Users/fitzgeraldbendezu/projects/codex-antigravity-mcp
 
 "$CODEX" plugin remove codex-antigravity@codex-antigravity-marketplace
 "$CODEX" plugin marketplace remove codex-antigravity-marketplace
@@ -170,4 +142,8 @@ git -C "$REPO" pull --ff-only origin main
 "$CODEX" plugin add codex-antigravity@codex-antigravity-marketplace
 ```
 
-Luego cierra completamente Codex (no solo la ventana), vuelve a abrirlo y crea una tarea nueva. Comprueba con `codex plugin list --json` que el plugin esté `enabled: true`. No ejecutes simultáneamente un `.mcp.json` manual y el plugin.
+---
+
+## 📄 License
+
+Released under the [MIT License](LICENSE).

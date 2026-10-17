@@ -36,6 +36,9 @@ fi
 EXTRA_PATHS=(
   "/opt/homebrew/bin"
   "/usr/local/bin"
+  "/usr/local/go/bin"
+  "$HOME/go/bin"
+  "$HOME/.cargo/bin"
   "$HOME/.nvm/versions/node/$(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -n 1)/bin"
   "$HOME/.local/share/fnm/current/bin"
   "$HOME/.fnm/current/bin"
