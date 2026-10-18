@@ -3,57 +3,27 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { findAgy, inspectAgy, isDirectory } from "./agy-discovery.js";
 import { AgySession } from "./agy-session.js";
+import {
+  formatSessionCreatedOutput,
+  formatSessionListOutput,
+  formatStatusOutput,
+  formatTurnOutput,
+  resultPayload
+} from "./format-output.js";
 import { SessionManager } from "./session-manager.js";
-import { AgyResult, ExecutionMode, SessionOptions } from "./types.js";
+import { ExecutionMode, SessionOptions } from "./types.js";
 import { promptWithRecovery } from "./prompt-recovery.js";
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.ANTIGRAVITY_TURN_TIMEOUT_MS) || 600_000;
 const DEFAULT_WAIT_MS = Number(process.env.ANTIGRAVITY_DEFAULT_WAIT_MS) || 20_000;
 const ALWAYS_LOAD_META = { "antigravity/alwaysLoad": true };
 
-function text(value: unknown, isError = false) {
+function textRaw(value: string, isError = false) {
+  return { content: [{ type: "text" as const, text: value }], isError };
+}
+
+function textJson(value: unknown, isError = false) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], isError };
-}
-
-function buildFollowUpHint(result: AgyResult, sessionId?: string): string | undefined {
-  if (result.status === "RUNNING") {
-    return `Turn is actively running (${result.currentStep ?? "in progress"}). Share the latest timeline steps with the user and call antigravity_session_watch with sessionId="${sessionId ?? ""}" and cursor=${result.nextCursor ?? 0} to keep reading the live channel.`;
-  }
-  if (result.errorCode === "QUOTA_EXCEEDED") {
-    return "Model quota or rate limit was reached. Create a new session with a lighter or alternative model (e.g. 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', or 'gpt-oss-120b-medium') and pass conversationId to resume seamlessly.";
-  }
-  if (result.errorCode === "AUTH_EXPIRED") {
-    return "Antigravity CLI authentication has expired. Ask the user to run 'agy' interactively in their terminal to log back in.";
-  }
-  return undefined;
-}
-
-function resultPayload(result: AgyResult, sessionId?: string) {
-  const timeline = (result.events ?? []).map((e) => `[#${e.seq}] ${e.summary}`);
-  return {
-    sessionId,
-    conversationId: result.conversationId,
-    status: result.status,
-    activeModel: result.activeModel,
-    permissionMode: result.permissionMode,
-    currentStep: result.currentStep,
-    workspaceActivity: result.workspaceActivity,
-    cumulativeUsage: result.cumulativeUsage,
-    nextCursor: result.nextCursor,
-    timeline,
-    events: result.events,
-    response: result.response,
-    error: result.error,
-    errorCode: result.errorCode,
-    diagnostics: result.diagnostics,
-    durationSeconds: result.durationSeconds,
-    numTurns: result.numTurns,
-    usage: result.usage,
-    tools: result.tools,
-    subagents: result.subagents,
-    recoveryAttempted: result.recoveryAttempted,
-    followUpHint: buildFollowUpHint(result, sessionId)
-  };
 }
 
 function attachLiveStream(
@@ -102,16 +72,16 @@ async function main(): Promise<void> {
   }
 
   const server = new McpServer(
-    { name: "codex-antigravity", version: "1.2.0" },
+    { name: "codex-antigravity", version: "2.0.0" },
     {
       capabilities: { tools: {}, logging: {}, resources: {} },
       instructions: [
-        "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent with a live activity channel.",
+        "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent with a lightweight live activity channel.",
         "Invoke at least one Antigravity tool immediately without asking for reconfirmation.",
         "Start with antigravity_status if checking availability, or create a persistent session (antigravity_session_create) for multi-turn work.",
-        "LIVE CHANNEL SUPERVISION: antigravity_session_prompt uses a live observation window by default (20s). If Antigravity is still working when the window elapses, it returns status='RUNNING' with timeline, workspaceActivity (filesRead, filesModified, commandsRun, mediaGenerated), and nextCursor without interrupting Antigravity. Immediately brief the user on what Antigravity just did and call antigravity_session_watch(sessionId, cursor=nextCursor) until status='SUCCESS'.",
+        "COMPACT NATIVE SUBAGENT FEED: While Antigravity is working, antigravity_session_prompt and antigravity_session_watch return a compact live ticker ([RUNNING], stateDetail, and only the new steps since cursor) to keep your context window clean. Briefly share those live steps with the user and call antigravity_session_watch(sessionId, cursor) until [SUCCESS], which returns the full activity summary (read/modified files, commands, generated media) and the final response.",
         "HOT STEERING & CONTEXT COMPACTION: Use antigravity_session_interrupt(sessionId, steerPrompt) if you need to stop or redirect an active turn in-flight while preserving the session conversation history. Set compact=true on antigravity_session_prompt during long multi-turn sessions to compact prior context via /compact before executing the next prompt.",
-        "MEDIA, PHOTO, IMAGE & VIDEO GENERATION: Antigravity can generate images/photos via its built-in image-generator subagent (generate_image), capture browser screenshots/videos (capture_browser_screenshot, browser_subagent, webm_encoder), and process video/audio via ffmpeg/sips. All generated media file paths are automatically surfaced in workspaceActivity.mediaGenerated.",
+        "MEDIA, PHOTO, IMAGE & VIDEO GENERATION: Antigravity can generate images/photos via its built-in image-generator subagent (generate_image), capture browser screenshots/videos (capture_browser_screenshot, browser_subagent, webm_encoder), and process video/audio via ffmpeg/sips. All generated media file paths are automatically surfaced in the activity summary.",
         "Sessions default to non-sandboxed plan mode with autonomous execution in the declared workspace. Use mode='accept-edits' or mode='auto' when the user requests implementations, refactors, media generation saved into the workspace, git branch/commit tasks, or fixes."
       ].join(" ")
     }
@@ -122,27 +92,17 @@ async function main(): Promise<void> {
     "antigravity://sessions/live",
     {
       title: "Active Antigravity Sessions Live Feed",
-      description: "Live status, current step, workspace activity, cumulative usage, and recent timeline for all active Antigravity sessions.",
-      mimeType: "application/json"
+      description: "Compact live status, stateDetail, and recent steps for all active Antigravity sessions.",
+      mimeType: "text/plain"
     },
     async () => {
-      const sessions = (manager?.list() ?? []).map((summary) => {
-        try {
-          const s = manager?.get(summary.sessionId);
-          return {
-            ...summary,
-            timeline: (s?.eventsSince(0) ?? []).map((e) => `[#${e.seq}] ${e.summary}`)
-          };
-        } catch {
-          return summary;
-        }
-      });
+      const sessions = manager?.list() ?? [];
       return {
         contents: [
           {
             uri: "antigravity://sessions/live",
-            mimeType: "application/json",
-            text: JSON.stringify({ sessions }, null, 2)
+            mimeType: "text/plain",
+            text: formatSessionListOutput(sessions, false)
           }
         ]
       };
@@ -150,18 +110,21 @@ async function main(): Promise<void> {
   );
 
   server.registerTool("antigravity_status", {
-    description: "Check the local agy binary, available model IDs and labels, authentication readiness, media/toolchain capabilities (image-generator, ffmpeg, webm_encoder, go, permissions), and adapter limits.",
-    inputSchema: {},
+    description: "Check the local agy binary, available model IDs, authentication readiness, media/toolchain capabilities (image-generator, ffmpeg, webm_encoder, go, permissions), and adapter limits in a compact summary.",
+    inputSchema: {
+      verbose: z.boolean().optional().describe("Set true only if you need the full raw JSON status payload.")
+    },
     _meta: ALWAYS_LOAD_META
-  }, async () => text({
-    ...(await inspectAgy()),
-    limits: {
+  }, async (args) => {
+    const status = await inspectAgy();
+    const limits = {
       maxSessions: 3,
       idleTimeoutMs: 900_000,
       defaultTurnTimeoutMs: DEFAULT_TIMEOUT_MS,
       defaultLiveWindowMs: DEFAULT_WAIT_MS
-    }
-  }));
+    };
+    return textRaw(formatStatusOutput(status, limits, args.verbose ?? false), !status.available);
+  });
 
   server.registerTool("antigravity_session_create", {
     description: "Start a persistent Antigravity subagent session with a live activity stream. Defaults to non-sandboxed plan mode with autonomous execution within the declared workspace. Use accept-edits or auto for code changes.",
@@ -174,7 +137,8 @@ async function main(): Promise<void> {
       mode: z.enum(["plan", "auto", "accept-edits"]).optional(),
       sandbox: z.boolean().optional(),
       skipPermissions: z.boolean().optional().describe("Allow autonomous tool/command execution in workspace (defaults to true)."),
-      conversationId: z.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation.")
+      conversationId: z.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation."),
+      verbose: z.boolean().optional().describe("Set true only if you need the full raw JSON session summary.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args) => {
@@ -198,23 +162,23 @@ async function main(): Promise<void> {
         conversationId: args.conversationId
       };
       const session = mgr.create(options);
-      return text({
-        ...session.summary(),
-        message: "Session started with live activity channel. Use antigravity_session_prompt and antigravity_session_watch to monitor progress in real time."
-      });
-    } catch (error) { return text({ error: error instanceof Error ? error.message : String(error) }, true); }
+      return textRaw(formatSessionCreatedOutput(session.summary(), args.verbose ?? false), false);
+    } catch (error) {
+      return textRaw(`[ERROR] ${error instanceof Error ? error.message : String(error)}`, true);
+    }
   });
 
   server.registerTool("antigravity_session_prompt", {
-    description: "Send one prompt to a persistent Antigravity session. Uses a 20s live observation window by default (configurable via waitMs, or disabled with waitForCompletion=true): if the turn is still running after waitMs, returns status='RUNNING' with the live timeline, workspaceActivity, and nextCursor so you can narrate progress and continue watching via antigravity_session_watch.",
+    description: "Send one prompt to a persistent Antigravity session. Uses a 20s live observation window by default (configurable via waitMs, or disabled with waitForCompletion=true): while running, returns a compact live ticker ([RUNNING], stateDetail, new steps, cursor); when done, returns the activity summary and final response.",
     inputSchema: {
       sessionId: z.string().uuid(),
       prompt: z.string().min(1),
       subagents: z.enum(["auto", "required", "off"]).optional(),
       compact: z.boolean().optional().describe("Set true to prefix the turn with /compact so Antigravity summarizes prior conversation context before answering."),
       timeoutMs: z.number().int().min(1_000).max(1_800_000).optional(),
-      waitMs: z.number().int().min(1_000).max(1_800_000).optional().describe("Live observation window in ms (defaults to 20000). Returns status='RUNNING' with live events if the turn is still working after waitMs, without killing the turn."),
-      waitForCompletion: z.boolean().optional().describe("Set true to block until the entire turn finishes instead of returning live RUNNING snapshots.")
+      waitMs: z.number().int().min(1_000).max(1_800_000).optional().describe("Live observation window in ms (defaults to 20000). Returns a compact [RUNNING] live update if the turn is still working after waitMs, without killing the turn."),
+      waitForCompletion: z.boolean().optional().describe("Set true to block until the entire turn finishes instead of returning live [RUNNING] updates."),
+      verbose: z.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -235,21 +199,22 @@ async function main(): Promise<void> {
       );
       const isErr = result.status !== "SUCCESS" && result.status !== "RUNNING"
         || (result.status === "SUCCESS" && !result.response.trim());
-      return text(resultPayload(result, args.sessionId), isErr);
+      return textRaw(formatTurnOutput(result, args.sessionId, args.verbose ?? false), isErr);
     } catch (error) {
-      return text({ error: error instanceof Error ? error.message : String(error) }, true);
+      return textRaw(`[ERROR] ${error instanceof Error ? error.message : String(error)}`, true);
     } finally {
       detach?.();
     }
   });
 
   server.registerTool("antigravity_session_watch", {
-    description: "Read the open live activity channel for a session. Returns all new steps (thoughts, messages, files viewed/edited, commands run, questions, subagents) since cursor. While a turn is running, waits for the next step or up to waitMs.",
+    description: "Read the open live activity channel for a session. Returns a compact live ticker ([RUNNING], stateDetail, and only new steps since cursor) while running, or the final summary and response when completed.",
     inputSchema: {
       sessionId: z.string().uuid(),
-      cursor: z.number().int().min(0).optional().describe("Pass nextCursor from the previous prompt/watch response to receive only new events (defaults to 0)."),
+      cursor: z.number().int().min(0).optional().describe("Pass cursor from the previous prompt/watch response to receive only new steps (defaults to 0)."),
       waitMs: z.number().int().min(0).max(120_000).optional().describe("Max time in ms to wait for new live activity (defaults to 15000). Use 0 for an instant non-blocking peek."),
-      returnOnStep: z.boolean().optional().describe("When true (default), returns as soon as a new step/message/tool event arrives so you can report live progress immediately.")
+      returnOnStep: z.boolean().optional().describe("When true (default), returns as soon as a new step/message/tool event arrives so you can report live progress immediately."),
+      verbose: z.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -264,9 +229,9 @@ async function main(): Promise<void> {
         returnOnStep: args.returnOnStep
       });
       const isErr = result.status === "ERROR" || result.status === "TIMEOUT";
-      return text(resultPayload(result, args.sessionId), isErr);
+      return textRaw(formatTurnOutput(result, args.sessionId, args.verbose ?? false), isErr);
     } catch (error) {
-      return text({ error: error instanceof Error ? error.message : String(error) }, true);
+      return textRaw(`[ERROR] ${error instanceof Error ? error.message : String(error)}`, true);
     } finally {
       detach?.();
     }
@@ -279,7 +244,8 @@ async function main(): Promise<void> {
       reason: z.string().min(1).optional().describe("Reason for interrupting the current turn."),
       steerPrompt: z.string().min(1).optional().describe("Optional new instruction to run immediately after interrupting the current turn."),
       subagents: z.enum(["auto", "required", "off"]).optional(),
-      waitMs: z.number().int().min(1_000).max(1_800_000).optional()
+      waitMs: z.number().int().min(1_000).max(1_800_000).optional(),
+      verbose: z.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -290,7 +256,7 @@ async function main(): Promise<void> {
       detach = attachLiveStream(server, session, extra);
       const interruptedResult = await session.interrupt(args.reason ?? "Interrupted by supervisor.");
       if (!args.steerPrompt) {
-        return text(resultPayload(interruptedResult, args.sessionId), false);
+        return textRaw(formatTurnOutput(interruptedResult, args.sessionId, args.verbose ?? false), false);
       }
       const steered = await promptWithRecovery(
         mgr,
@@ -300,25 +266,33 @@ async function main(): Promise<void> {
         DEFAULT_TIMEOUT_MS,
         args.waitMs ?? DEFAULT_WAIT_MS
       );
-      return text({
-        interruptedTurn: {
-          status: interruptedResult.status,
-          partialResponse: interruptedResult.response
-        },
-        ...resultPayload(steered, args.sessionId)
-      }, steered.status !== "SUCCESS" && steered.status !== "RUNNING");
+      if (args.verbose) {
+        return textJson({
+          interruptedTurn: {
+            status: interruptedResult.status,
+            partialResponse: interruptedResult.response
+          },
+          ...resultPayload(steered, args.sessionId)
+        }, steered.status !== "SUCCESS" && steered.status !== "RUNNING");
+      }
+      return textRaw(
+        `[INTERRUPTED PRIOR TURN] ${args.reason ?? "Interrupted by supervisor."}\n${formatTurnOutput(steered, args.sessionId, false)}`,
+        steered.status !== "SUCCESS" && steered.status !== "RUNNING"
+      );
     } catch (error) {
-      return text({ error: error instanceof Error ? error.message : String(error) }, true);
+      return textRaw(`[ERROR] ${error instanceof Error ? error.message : String(error)}`, true);
     } finally {
       detach?.();
     }
   });
 
   server.registerTool("antigravity_session_list", {
-    description: "List active persistent Antigravity sessions with their current live step, active model, workspaceActivity, cumulativeUsage, and event cursor.",
-    inputSchema: {},
+    description: "List active persistent Antigravity sessions with their current state, active model, cursor, and live stateDetail.",
+    inputSchema: {
+      verbose: z.boolean().optional().describe("Set true only if you need the full raw JSON session list.")
+    },
     _meta: ALWAYS_LOAD_META
-  }, async () => text({ sessions: manager?.list() ?? [] }));
+  }, async (args) => textRaw(formatSessionListOutput(manager?.list() ?? [], args.verbose ?? false), false));
 
   server.registerTool("antigravity_session_close", {
     description: "Close a persistent Antigravity session. Safe to call for an already-closed session.",
@@ -327,12 +301,14 @@ async function main(): Promise<void> {
   }, async (args) => {
     try {
       await manager?.close(args.sessionId);
-      return text({ sessionId: args.sessionId, closed: true });
-    } catch (error) { return text({ error: error instanceof Error ? error.message : String(error) }, true); }
+      return textRaw(`[SESSION CLOSED] sessionId=${args.sessionId}`, false);
+    } catch (error) {
+      return textRaw(`[ERROR] ${error instanceof Error ? error.message : String(error)}`, true);
+    }
   });
 
   server.registerTool("antigravity_run", {
-    description: "Run one isolated Antigravity subagent turn and return the response along with the full chronological activity timeline and workspaceActivity. Use a persistent session (antigravity_session_create + antigravity_session_prompt + antigravity_session_watch) for live multi-step supervision.",
+    description: "Run one isolated Antigravity subagent turn and return the activity summary and final response. Use a persistent session (antigravity_session_create + antigravity_session_prompt + antigravity_session_watch) for live multi-step supervision.",
     inputSchema: {
       cwd: z.string().min(1),
       addDirs: z.array(z.string().min(1)).optional(),
@@ -345,7 +321,8 @@ async function main(): Promise<void> {
       skipPermissions: z.boolean().optional().describe("Allow autonomous tool/command execution in workspace (defaults to true)."),
       conversationId: z.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation."),
       subagents: z.enum(["auto", "required", "off"]).optional(),
-      timeoutMs: z.number().int().min(1_000).max(1_800_000).optional()
+      timeoutMs: z.number().int().min(1_000).max(1_800_000).optional(),
+      verbose: z.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -373,9 +350,10 @@ async function main(): Promise<void> {
       id = session.id;
       detach = attachLiveStream(server, session, extra);
       const result = await promptWithRecovery(mgr, session.id, args.prompt, args.subagents, args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      return text(resultPayload(result, session.id), result.status !== "SUCCESS" || !result.response.trim());
-    } catch (error) { return text({ error: error instanceof Error ? error.message : String(error) }, true); }
-    finally {
+      return textRaw(formatTurnOutput(result, session.id, args.verbose ?? false), result.status !== "SUCCESS" || !result.response.trim());
+    } catch (error) {
+      return textRaw(`[ERROR] ${error instanceof Error ? error.message : String(error)}`, true);
+    } finally {
       detach?.();
       if (id) await manager?.close(id);
     }

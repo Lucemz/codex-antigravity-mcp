@@ -4621,7 +4621,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text, msg) => text + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -21629,6 +21629,199 @@ function isDirectory(path) {
   }
 }
 
+// src/format-output.ts
+var MAX_LIVE_STEPS = 8;
+var MAX_PREVIEW_CHARS = 300;
+function livePreview(value) {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  return singleLine.length > MAX_PREVIEW_CHARS ? `${singleLine.slice(0, MAX_PREVIEW_CHARS - 1)}\u2026` : singleLine;
+}
+function buildFollowUpHint(result, sessionId) {
+  if (result.status === "RUNNING") {
+    return `Share these live steps with the user and call antigravity_session_watch(sessionId="${sessionId ?? ""}", cursor=${result.nextCursor ?? 0})`;
+  }
+  if (result.errorCode === "QUOTA_EXCEEDED") {
+    return "Model quota or rate limit was reached. Create a new session with a lighter or alternative model (e.g. 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', or 'gpt-oss-120b-medium') and pass conversationId to resume seamlessly.";
+  }
+  if (result.errorCode === "AUTH_EXPIRED") {
+    return "Antigravity CLI authentication has expired. Ask the user to run 'agy' interactively in their terminal to log back in.";
+  }
+  return void 0;
+}
+function resultPayload(result, sessionId) {
+  const timeline = (result.events ?? []).map((e) => `[#${e.seq}] ${e.summary}`);
+  return {
+    sessionId,
+    conversationId: result.conversationId,
+    status: result.status,
+    activeModel: result.activeModel,
+    permissionMode: result.permissionMode,
+    currentStep: result.currentStep,
+    workspaceActivity: result.workspaceActivity,
+    cumulativeUsage: result.cumulativeUsage,
+    nextCursor: result.nextCursor,
+    timeline,
+    events: result.events,
+    response: result.response,
+    error: result.error,
+    errorCode: result.errorCode,
+    diagnostics: result.diagnostics,
+    durationSeconds: result.durationSeconds,
+    numTurns: result.numTurns,
+    usage: result.usage,
+    tools: result.tools,
+    subagents: result.subagents,
+    recoveryAttempted: result.recoveryAttempted,
+    followUpHint: buildFollowUpHint(result, sessionId)
+  };
+}
+function formatStatusOutput(status, limits, verbose = false) {
+  if (verbose) {
+    return JSON.stringify({ ...status, limits }, null, 2);
+  }
+  if (!status.available) {
+    return `[UNAVAILABLE] auth=${status.authentication} | ${status.diagnostics ?? "agy binary not found"}`;
+  }
+  const caps = status.capabilities;
+  const perms = caps?.settingsPermissions;
+  const lines = [
+    `[READY] agy ${status.version ?? "unknown"} (${status.binary ?? "agy"}) | auth=${status.authentication}`,
+    `models: ${(status.models ?? []).join(", ") || "none"}`,
+    `capabilities: image-generator=${caps?.imageGeneration ? "ready" : "off"}, video-encoding=${caps?.videoEncoding ? "ready" : "off"}${caps?.goBinary ? `, go=${caps.goBinary}` : ""}${caps?.ffmpegBinary ? `, ffmpeg=${caps.ffmpegBinary}` : ""}${perms?.toolPermission ? `, permissions=${perms.toolPermission}` : ""}${perms?.allowNonWorkspaceAccess !== void 0 ? ` (non-workspace=${perms.allowNonWorkspaceAccess})` : ""}`,
+    `limits: maxSessions=${limits.maxSessions}, liveWindow=${Math.round(limits.defaultLiveWindowMs / 1e3)}s, turnTimeout=${Math.round(limits.defaultTurnTimeoutMs / 1e3)}s`
+  ];
+  if (status.diagnostics) {
+    lines.push(`diagnostics: ${status.diagnostics}`);
+  }
+  return lines.join("\n");
+}
+function formatSessionCreatedOutput(summary, verbose = false) {
+  if (verbose) {
+    return JSON.stringify({
+      ...summary,
+      message: "Session started with live activity channel. Use antigravity_session_prompt and antigravity_session_watch to monitor progress in real time."
+    }, null, 2);
+  }
+  const parts = [
+    `[SESSION CREATED] sessionId=${summary.sessionId}`,
+    `mode=${summary.mode}`,
+    `model=${summary.activeModel ?? "default"}`,
+    `cwd=${summary.cwd}`
+  ];
+  if (summary.conversationId) parts.push(`conv=${summary.conversationId}`);
+  return [
+    parts.join(" | "),
+    `next: call antigravity_session_prompt(sessionId="${summary.sessionId}", prompt="...")`
+  ].join("\n");
+}
+function formatTurnOutput(result, sessionId, verbose = false) {
+  if (verbose) {
+    return JSON.stringify(resultPayload(result, sessionId), null, 2);
+  }
+  const events = result.events ?? [];
+  const hint = buildFollowUpHint(result, sessionId);
+  if (result.status === "RUNNING") {
+    const headerParts2 = [
+      `[RUNNING] session=${sessionId ?? "ephemeral"}`,
+      result.conversationId ? `conv=${result.conversationId}` : void 0,
+      result.activeModel ? `model=${result.activeModel}` : void 0,
+      `cursor=${result.nextCursor ?? 0}`
+    ].filter(Boolean);
+    const lines2 = [
+      headerParts2.join(" | "),
+      `stateDetail: ${livePreview(result.currentStep ?? "\u23F3 Working...")}`
+    ];
+    if (events.length > 0) {
+      lines2.push("steps:");
+      const recent = events.slice(-MAX_LIVE_STEPS);
+      const omitted = events.length - recent.length;
+      if (omitted > 0) {
+        lines2.push(`  ${omitted} earlier steps omitted; repeat this request with verbose=true and the same input cursor for buffered events.`);
+      }
+      for (const ev of recent) {
+        lines2.push(`  #${ev.seq} ${livePreview(ev.summary)}`);
+      }
+    }
+    if (hint) {
+      lines2.push(`next: ${hint}`);
+    }
+    return lines2.join("\n");
+  }
+  const totalTokens = typeof result.usage?.total_tokens === "number" ? result.usage.total_tokens : result.cumulativeUsage?.totalTokens;
+  const headerParts = [
+    `[${result.status}] session=${sessionId ?? "ephemeral"}`,
+    result.conversationId ? `conv=${result.conversationId}` : void 0,
+    result.activeModel ? `model=${result.activeModel}` : void 0,
+    result.durationSeconds !== void 0 ? `${result.durationSeconds.toFixed(1)}s` : void 0,
+    totalTokens ? `tokens=${totalTokens}` : void 0
+  ].filter(Boolean);
+  const lines = [headerParts.join(" | ")];
+  const activityLines = [];
+  const wa = result.workspaceActivity;
+  if (wa) {
+    if (wa.filesRead.length > 0) activityLines.push(`  read: ${wa.filesRead.join(", ")}`);
+    if (wa.filesModified.length > 0) activityLines.push(`  modified: ${wa.filesModified.join(", ")}`);
+    if (wa.commandsRun.length > 0) {
+      const cmds = wa.commandsRun.map(
+        (c) => `${c.command} (${c.state}${c.durationSeconds !== void 0 ? `, ${c.durationSeconds.toFixed(1)}s` : ""})`
+      );
+      activityLines.push(`  commands: ${cmds.join("; ")}`);
+    }
+    if (wa.mediaGenerated.length > 0) {
+      activityLines.push(`  media: ${wa.mediaGenerated.join(", ")}`);
+    }
+  }
+  if (result.subagents.length > 0) {
+    const subs = result.subagents.map(
+      (s) => s.role || s.Role || s.type_name || s.type || s.conversation_id || "subagent"
+    );
+    activityLines.push(`  subagents: ${subs.join(", ")}`);
+  }
+  const nonFinalEvents = events.filter(
+    (ev) => ev.type !== "result" && !(ev.type === "message" && ev.text?.trim() === result.response.trim())
+  );
+  if (nonFinalEvents.length > 0) {
+    const recent = nonFinalEvents.slice(-8);
+    activityLines.push(`  steps (${nonFinalEvents.length}):`);
+    for (const ev of recent) {
+      activityLines.push(`    #${ev.seq} ${ev.summary}`);
+    }
+  }
+  if (activityLines.length > 0) {
+    lines.push("activity:");
+    lines.push(...activityLines);
+  }
+  if (result.error) {
+    lines.push(`error: ${result.errorCode ? `[${result.errorCode}] ` : ""}${result.error}`);
+  }
+  if (result.diagnostics && result.status !== "SUCCESS") {
+    lines.push(`diagnostics: ${result.diagnostics.trim().slice(-500)}`);
+  }
+  if (hint) {
+    lines.push(`hint: ${hint}`);
+  }
+  if (result.response.trim()) {
+    lines.push("---");
+    lines.push(result.response.trim());
+  }
+  return lines.join("\n");
+}
+function formatSessionListOutput(sessions, verbose = false) {
+  if (verbose) {
+    return JSON.stringify({ sessions }, null, 2);
+  }
+  if (sessions.length === 0) {
+    return "No active Antigravity sessions.";
+  }
+  const lines = [`Active sessions (${sessions.length}):`];
+  for (const s of sessions) {
+    lines.push(
+      `- ${s.sessionId} [${s.state}] mode=${s.mode} | model=${s.activeModel ?? "default"} | cursor=${s.lastCursor} | stateDetail: ${s.currentStep ?? "idle"}`
+    );
+  }
+  return lines.join("\n");
+}
+
 // src/agy-session.ts
 import { spawn as spawn2 } from "child_process";
 import { randomUUID } from "crypto";
@@ -21659,10 +21852,10 @@ ${diagnostics ?? ""}`;
   }
   return "EXECUTION_ERROR";
 }
-function extractMediaPaths(text2) {
-  if (typeof text2 !== "string" || !text2) return [];
+function extractMediaPaths(text) {
+  if (typeof text !== "string" || !text) return [];
   const found = /* @__PURE__ */ new Set();
-  for (const match of text2.matchAll(MEDIA_PATH_SCAN_REGEX)) {
+  for (const match of text.matchAll(MEDIA_PATH_SCAN_REGEX)) {
     const candidate = match[1]?.replace(/[.,;:]+$/, "");
     if (candidate && MEDIA_EXT_REGEX.test(candidate)) {
       found.add(candidate);
@@ -22626,47 +22819,11 @@ async function promptWithRecovery(manager, sessionId, prompt, strategy, timeoutM
 var DEFAULT_TIMEOUT_MS = Number(process.env.ANTIGRAVITY_TURN_TIMEOUT_MS) || 6e5;
 var DEFAULT_WAIT_MS = Number(process.env.ANTIGRAVITY_DEFAULT_WAIT_MS) || 2e4;
 var ALWAYS_LOAD_META = { "antigravity/alwaysLoad": true };
-function text(value, isError = false) {
+function textRaw(value, isError = false) {
+  return { content: [{ type: "text", text: value }], isError };
+}
+function textJson(value, isError = false) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError };
-}
-function buildFollowUpHint(result, sessionId) {
-  if (result.status === "RUNNING") {
-    return `Turn is actively running (${result.currentStep ?? "in progress"}). Share the latest timeline steps with the user and call antigravity_session_watch with sessionId="${sessionId ?? ""}" and cursor=${result.nextCursor ?? 0} to keep reading the live channel.`;
-  }
-  if (result.errorCode === "QUOTA_EXCEEDED") {
-    return "Model quota or rate limit was reached. Create a new session with a lighter or alternative model (e.g. 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', or 'gpt-oss-120b-medium') and pass conversationId to resume seamlessly.";
-  }
-  if (result.errorCode === "AUTH_EXPIRED") {
-    return "Antigravity CLI authentication has expired. Ask the user to run 'agy' interactively in their terminal to log back in.";
-  }
-  return void 0;
-}
-function resultPayload(result, sessionId) {
-  const timeline = (result.events ?? []).map((e) => `[#${e.seq}] ${e.summary}`);
-  return {
-    sessionId,
-    conversationId: result.conversationId,
-    status: result.status,
-    activeModel: result.activeModel,
-    permissionMode: result.permissionMode,
-    currentStep: result.currentStep,
-    workspaceActivity: result.workspaceActivity,
-    cumulativeUsage: result.cumulativeUsage,
-    nextCursor: result.nextCursor,
-    timeline,
-    events: result.events,
-    response: result.response,
-    error: result.error,
-    errorCode: result.errorCode,
-    diagnostics: result.diagnostics,
-    durationSeconds: result.durationSeconds,
-    numTurns: result.numTurns,
-    usage: result.usage,
-    tools: result.tools,
-    subagents: result.subagents,
-    recoveryAttempted: result.recoveryAttempted,
-    followUpHint: buildFollowUpHint(result, sessionId)
-  };
 }
 function attachLiveStream(server, session, extra) {
   const progressToken = extra?._meta?.progressToken;
@@ -22708,16 +22865,16 @@ async function main() {
     return { binary, manager };
   }
   const server = new McpServer(
-    { name: "codex-antigravity", version: "1.2.0" },
+    { name: "codex-antigravity", version: "2.0.0" },
     {
       capabilities: { tools: {}, logging: {}, resources: {} },
       instructions: [
-        "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent with a live activity channel.",
+        "When this plugin is explicitly selected or mentioned, treat Antigravity as an autonomous expert coding subagent with a lightweight live activity channel.",
         "Invoke at least one Antigravity tool immediately without asking for reconfirmation.",
         "Start with antigravity_status if checking availability, or create a persistent session (antigravity_session_create) for multi-turn work.",
-        "LIVE CHANNEL SUPERVISION: antigravity_session_prompt uses a live observation window by default (20s). If Antigravity is still working when the window elapses, it returns status='RUNNING' with timeline, workspaceActivity (filesRead, filesModified, commandsRun, mediaGenerated), and nextCursor without interrupting Antigravity. Immediately brief the user on what Antigravity just did and call antigravity_session_watch(sessionId, cursor=nextCursor) until status='SUCCESS'.",
+        "COMPACT NATIVE SUBAGENT FEED: While Antigravity is working, antigravity_session_prompt and antigravity_session_watch return a compact live ticker ([RUNNING], stateDetail, and only the new steps since cursor) to keep your context window clean. Briefly share those live steps with the user and call antigravity_session_watch(sessionId, cursor) until [SUCCESS], which returns the full activity summary (read/modified files, commands, generated media) and the final response.",
         "HOT STEERING & CONTEXT COMPACTION: Use antigravity_session_interrupt(sessionId, steerPrompt) if you need to stop or redirect an active turn in-flight while preserving the session conversation history. Set compact=true on antigravity_session_prompt during long multi-turn sessions to compact prior context via /compact before executing the next prompt.",
-        "MEDIA, PHOTO, IMAGE & VIDEO GENERATION: Antigravity can generate images/photos via its built-in image-generator subagent (generate_image), capture browser screenshots/videos (capture_browser_screenshot, browser_subagent, webm_encoder), and process video/audio via ffmpeg/sips. All generated media file paths are automatically surfaced in workspaceActivity.mediaGenerated.",
+        "MEDIA, PHOTO, IMAGE & VIDEO GENERATION: Antigravity can generate images/photos via its built-in image-generator subagent (generate_image), capture browser screenshots/videos (capture_browser_screenshot, browser_subagent, webm_encoder), and process video/audio via ffmpeg/sips. All generated media file paths are automatically surfaced in the activity summary.",
         "Sessions default to non-sandboxed plan mode with autonomous execution in the declared workspace. Use mode='accept-edits' or mode='auto' when the user requests implementations, refactors, media generation saved into the workspace, git branch/commit tasks, or fixes."
       ].join(" ")
     }
@@ -22727,45 +22884,38 @@ async function main() {
     "antigravity://sessions/live",
     {
       title: "Active Antigravity Sessions Live Feed",
-      description: "Live status, current step, workspace activity, cumulative usage, and recent timeline for all active Antigravity sessions.",
-      mimeType: "application/json"
+      description: "Compact live status, stateDetail, and recent steps for all active Antigravity sessions.",
+      mimeType: "text/plain"
     },
     async () => {
-      const sessions = (manager?.list() ?? []).map((summary) => {
-        try {
-          const s = manager?.get(summary.sessionId);
-          return {
-            ...summary,
-            timeline: (s?.eventsSince(0) ?? []).map((e) => `[#${e.seq}] ${e.summary}`)
-          };
-        } catch {
-          return summary;
-        }
-      });
+      const sessions = manager?.list() ?? [];
       return {
         contents: [
           {
             uri: "antigravity://sessions/live",
-            mimeType: "application/json",
-            text: JSON.stringify({ sessions }, null, 2)
+            mimeType: "text/plain",
+            text: formatSessionListOutput(sessions, false)
           }
         ]
       };
     }
   );
   server.registerTool("antigravity_status", {
-    description: "Check the local agy binary, available model IDs and labels, authentication readiness, media/toolchain capabilities (image-generator, ffmpeg, webm_encoder, go, permissions), and adapter limits.",
-    inputSchema: {},
+    description: "Check the local agy binary, available model IDs, authentication readiness, media/toolchain capabilities (image-generator, ffmpeg, webm_encoder, go, permissions), and adapter limits in a compact summary.",
+    inputSchema: {
+      verbose: external_exports.boolean().optional().describe("Set true only if you need the full raw JSON status payload.")
+    },
     _meta: ALWAYS_LOAD_META
-  }, async () => text({
-    ...await inspectAgy(),
-    limits: {
+  }, async (args) => {
+    const status = await inspectAgy();
+    const limits = {
       maxSessions: 3,
       idleTimeoutMs: 9e5,
       defaultTurnTimeoutMs: DEFAULT_TIMEOUT_MS,
       defaultLiveWindowMs: DEFAULT_WAIT_MS
-    }
-  }));
+    };
+    return textRaw(formatStatusOutput(status, limits, args.verbose ?? false), !status.available);
+  });
   server.registerTool("antigravity_session_create", {
     description: "Start a persistent Antigravity subagent session with a live activity stream. Defaults to non-sandboxed plan mode with autonomous execution within the declared workspace. Use accept-edits or auto for code changes.",
     inputSchema: {
@@ -22777,7 +22927,8 @@ async function main() {
       mode: external_exports.enum(["plan", "auto", "accept-edits"]).optional(),
       sandbox: external_exports.boolean().optional(),
       skipPermissions: external_exports.boolean().optional().describe("Allow autonomous tool/command execution in workspace (defaults to true)."),
-      conversationId: external_exports.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation.")
+      conversationId: external_exports.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation."),
+      verbose: external_exports.boolean().optional().describe("Set true only if you need the full raw JSON session summary.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args) => {
@@ -22801,24 +22952,22 @@ async function main() {
         conversationId: args.conversationId
       };
       const session = mgr.create(options);
-      return text({
-        ...session.summary(),
-        message: "Session started with live activity channel. Use antigravity_session_prompt and antigravity_session_watch to monitor progress in real time."
-      });
+      return textRaw(formatSessionCreatedOutput(session.summary(), args.verbose ?? false), false);
     } catch (error2) {
-      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+      return textRaw(`[ERROR] ${error2 instanceof Error ? error2.message : String(error2)}`, true);
     }
   });
   server.registerTool("antigravity_session_prompt", {
-    description: "Send one prompt to a persistent Antigravity session. Uses a 20s live observation window by default (configurable via waitMs, or disabled with waitForCompletion=true): if the turn is still running after waitMs, returns status='RUNNING' with the live timeline, workspaceActivity, and nextCursor so you can narrate progress and continue watching via antigravity_session_watch.",
+    description: "Send one prompt to a persistent Antigravity session. Uses a 20s live observation window by default (configurable via waitMs, or disabled with waitForCompletion=true): while running, returns a compact live ticker ([RUNNING], stateDetail, new steps, cursor); when done, returns the activity summary and final response.",
     inputSchema: {
       sessionId: external_exports.string().uuid(),
       prompt: external_exports.string().min(1),
       subagents: external_exports.enum(["auto", "required", "off"]).optional(),
       compact: external_exports.boolean().optional().describe("Set true to prefix the turn with /compact so Antigravity summarizes prior conversation context before answering."),
       timeoutMs: external_exports.number().int().min(1e3).max(18e5).optional(),
-      waitMs: external_exports.number().int().min(1e3).max(18e5).optional().describe("Live observation window in ms (defaults to 20000). Returns status='RUNNING' with live events if the turn is still working after waitMs, without killing the turn."),
-      waitForCompletion: external_exports.boolean().optional().describe("Set true to block until the entire turn finishes instead of returning live RUNNING snapshots.")
+      waitMs: external_exports.number().int().min(1e3).max(18e5).optional().describe("Live observation window in ms (defaults to 20000). Returns a compact [RUNNING] live update if the turn is still working after waitMs, without killing the turn."),
+      waitForCompletion: external_exports.boolean().optional().describe("Set true to block until the entire turn finishes instead of returning live [RUNNING] updates."),
+      verbose: external_exports.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -22838,20 +22987,21 @@ async function main() {
         args.compact ?? false
       );
       const isErr = result.status !== "SUCCESS" && result.status !== "RUNNING" || result.status === "SUCCESS" && !result.response.trim();
-      return text(resultPayload(result, args.sessionId), isErr);
+      return textRaw(formatTurnOutput(result, args.sessionId, args.verbose ?? false), isErr);
     } catch (error2) {
-      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+      return textRaw(`[ERROR] ${error2 instanceof Error ? error2.message : String(error2)}`, true);
     } finally {
       detach?.();
     }
   });
   server.registerTool("antigravity_session_watch", {
-    description: "Read the open live activity channel for a session. Returns all new steps (thoughts, messages, files viewed/edited, commands run, questions, subagents) since cursor. While a turn is running, waits for the next step or up to waitMs.",
+    description: "Read the open live activity channel for a session. Returns a compact live ticker ([RUNNING], stateDetail, and only new steps since cursor) while running, or the final summary and response when completed.",
     inputSchema: {
       sessionId: external_exports.string().uuid(),
-      cursor: external_exports.number().int().min(0).optional().describe("Pass nextCursor from the previous prompt/watch response to receive only new events (defaults to 0)."),
+      cursor: external_exports.number().int().min(0).optional().describe("Pass cursor from the previous prompt/watch response to receive only new steps (defaults to 0)."),
       waitMs: external_exports.number().int().min(0).max(12e4).optional().describe("Max time in ms to wait for new live activity (defaults to 15000). Use 0 for an instant non-blocking peek."),
-      returnOnStep: external_exports.boolean().optional().describe("When true (default), returns as soon as a new step/message/tool event arrives so you can report live progress immediately.")
+      returnOnStep: external_exports.boolean().optional().describe("When true (default), returns as soon as a new step/message/tool event arrives so you can report live progress immediately."),
+      verbose: external_exports.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -22866,9 +23016,9 @@ async function main() {
         returnOnStep: args.returnOnStep
       });
       const isErr = result.status === "ERROR" || result.status === "TIMEOUT";
-      return text(resultPayload(result, args.sessionId), isErr);
+      return textRaw(formatTurnOutput(result, args.sessionId, args.verbose ?? false), isErr);
     } catch (error2) {
-      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+      return textRaw(`[ERROR] ${error2 instanceof Error ? error2.message : String(error2)}`, true);
     } finally {
       detach?.();
     }
@@ -22880,7 +23030,8 @@ async function main() {
       reason: external_exports.string().min(1).optional().describe("Reason for interrupting the current turn."),
       steerPrompt: external_exports.string().min(1).optional().describe("Optional new instruction to run immediately after interrupting the current turn."),
       subagents: external_exports.enum(["auto", "required", "off"]).optional(),
-      waitMs: external_exports.number().int().min(1e3).max(18e5).optional()
+      waitMs: external_exports.number().int().min(1e3).max(18e5).optional(),
+      verbose: external_exports.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -22891,7 +23042,7 @@ async function main() {
       detach = attachLiveStream(server, session, extra);
       const interruptedResult = await session.interrupt(args.reason ?? "Interrupted by supervisor.");
       if (!args.steerPrompt) {
-        return text(resultPayload(interruptedResult, args.sessionId), false);
+        return textRaw(formatTurnOutput(interruptedResult, args.sessionId, args.verbose ?? false), false);
       }
       const steered = await promptWithRecovery(
         mgr,
@@ -22901,24 +23052,33 @@ async function main() {
         DEFAULT_TIMEOUT_MS,
         args.waitMs ?? DEFAULT_WAIT_MS
       );
-      return text({
-        interruptedTurn: {
-          status: interruptedResult.status,
-          partialResponse: interruptedResult.response
-        },
-        ...resultPayload(steered, args.sessionId)
-      }, steered.status !== "SUCCESS" && steered.status !== "RUNNING");
+      if (args.verbose) {
+        return textJson({
+          interruptedTurn: {
+            status: interruptedResult.status,
+            partialResponse: interruptedResult.response
+          },
+          ...resultPayload(steered, args.sessionId)
+        }, steered.status !== "SUCCESS" && steered.status !== "RUNNING");
+      }
+      return textRaw(
+        `[INTERRUPTED PRIOR TURN] ${args.reason ?? "Interrupted by supervisor."}
+${formatTurnOutput(steered, args.sessionId, false)}`,
+        steered.status !== "SUCCESS" && steered.status !== "RUNNING"
+      );
     } catch (error2) {
-      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+      return textRaw(`[ERROR] ${error2 instanceof Error ? error2.message : String(error2)}`, true);
     } finally {
       detach?.();
     }
   });
   server.registerTool("antigravity_session_list", {
-    description: "List active persistent Antigravity sessions with their current live step, active model, workspaceActivity, cumulativeUsage, and event cursor.",
-    inputSchema: {},
+    description: "List active persistent Antigravity sessions with their current state, active model, cursor, and live stateDetail.",
+    inputSchema: {
+      verbose: external_exports.boolean().optional().describe("Set true only if you need the full raw JSON session list.")
+    },
     _meta: ALWAYS_LOAD_META
-  }, async () => text({ sessions: manager?.list() ?? [] }));
+  }, async (args) => textRaw(formatSessionListOutput(manager?.list() ?? [], args.verbose ?? false), false));
   server.registerTool("antigravity_session_close", {
     description: "Close a persistent Antigravity session. Safe to call for an already-closed session.",
     inputSchema: { sessionId: external_exports.string().uuid() },
@@ -22926,13 +23086,13 @@ async function main() {
   }, async (args) => {
     try {
       await manager?.close(args.sessionId);
-      return text({ sessionId: args.sessionId, closed: true });
+      return textRaw(`[SESSION CLOSED] sessionId=${args.sessionId}`, false);
     } catch (error2) {
-      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+      return textRaw(`[ERROR] ${error2 instanceof Error ? error2.message : String(error2)}`, true);
     }
   });
   server.registerTool("antigravity_run", {
-    description: "Run one isolated Antigravity subagent turn and return the response along with the full chronological activity timeline and workspaceActivity. Use a persistent session (antigravity_session_create + antigravity_session_prompt + antigravity_session_watch) for live multi-step supervision.",
+    description: "Run one isolated Antigravity subagent turn and return the activity summary and final response. Use a persistent session (antigravity_session_create + antigravity_session_prompt + antigravity_session_watch) for live multi-step supervision.",
     inputSchema: {
       cwd: external_exports.string().min(1),
       addDirs: external_exports.array(external_exports.string().min(1)).optional(),
@@ -22945,7 +23105,8 @@ async function main() {
       skipPermissions: external_exports.boolean().optional().describe("Allow autonomous tool/command execution in workspace (defaults to true)."),
       conversationId: external_exports.string().min(1).optional().describe("Optional previous conversation_id to resume via --conversation."),
       subagents: external_exports.enum(["auto", "required", "off"]).optional(),
-      timeoutMs: external_exports.number().int().min(1e3).max(18e5).optional()
+      timeoutMs: external_exports.number().int().min(1e3).max(18e5).optional(),
+      verbose: external_exports.boolean().optional().describe("Set true only if you need the full raw JSON payload.")
     },
     _meta: ALWAYS_LOAD_META
   }, async (args, extra) => {
@@ -22973,9 +23134,9 @@ async function main() {
       id = session.id;
       detach = attachLiveStream(server, session, extra);
       const result = await promptWithRecovery(mgr, session.id, args.prompt, args.subagents, args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      return text(resultPayload(result, session.id), result.status !== "SUCCESS" || !result.response.trim());
+      return textRaw(formatTurnOutput(result, session.id, args.verbose ?? false), result.status !== "SUCCESS" || !result.response.trim());
     } catch (error2) {
-      return text({ error: error2 instanceof Error ? error2.message : String(error2) }, true);
+      return textRaw(`[ERROR] ${error2 instanceof Error ? error2.message : String(error2)}`, true);
     } finally {
       detach?.();
       if (id) await manager?.close(id);

@@ -1,17 +1,29 @@
 # Codex Antigravity MCP (`codex-antigravity-mcp`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.2.0](https://img.shields.io/badge/version-1.2.0-green.svg)](package.json)
+[![Version: 2.0.0](https://img.shields.io/badge/version-2.0.0-green.svg)](package.json)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](package.json)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-purple.svg)](https://modelcontextprotocol.io)
 
 Plugin and MCP server for **Codex** (Desktop & CLI) that delegates software engineering, refactoring, architectural auditing, git branch management, and test execution to **Google Antigravity CLI (`agy`)** as a persistent autonomous coding subagent with a real-time **Live Activity Channel**.
 
-## What's New in v1.2.0
+## What's New in v2.0.0
 
-- **Live Activity Channel (`antigravity_session_watch` + `waitMs`)**: Codex observes what `agy` is doing step by step in real time (reasoning thoughts, intermediate messages, files read/modified via `view_file` / `replace_file_content`, shell commands executed via `run_command`, and spawned subagents) with a default 20-second observation window that returns `status: "RUNNING"` snapshots without interrupting the turn.
+- Compact text output is now the default for tools. Running turns show `[RUNNING]`, `stateDetail`, up to eight recent new steps, and `cursor`; each live preview is capped at 300 characters on one line. Omitted steps are counted.
+- Completed turns show an `activity:` summary followed by the final Markdown response. Partial responses and cumulative workspace activity are not repeated on each live poll.
+- Pass `verbose: true` to status, create, prompt, watch, interrupt, list, or run to get the full JSON payload. The live resource `antigravity://sessions/live` now returns a compact `text/plain` session list.
+
+### Migrating from 1.2.0
+
+This release changes the default output format. Clients that parse tool text with `JSON.parse` must send `verbose: true`; JSON turn responses retain `status`, `events`, `timeline`, `workspaceActivity`, `cumulativeUsage`, and `nextCursor`. Close confirmations and handler exceptions now return text even when other requests use verbose mode.
+
+For compact live monitoring, pass the returned `cursor` to the next watch call. To inspect omitted events, repeat the watch with `verbose: true` and the **previous input cursor** before advancing. The session retains at most 500 events, so older events can expire from the buffer.
+
+## Session and Media Features
+
+- **Live Activity Channel (`antigravity_session_watch` + `waitMs`)**: Codex observes what `agy` is doing step by step in real time (reasoning thoughts, intermediate messages, files read/modified via `view_file` / `replace_file_content`, shell commands executed via `run_command`, and spawned subagents) with a default 20-second observation window that returns `[RUNNING]` updates without interrupting the turn.
 - **Hot Interrupt & Steering (`antigravity_session_interrupt`)**: Stop or redirect an active turn mid-flight while automatically reconnecting to the same `conversationId` via `--conversation`.
-- **Workspace Impact, Media & Token Tracking (`workspaceActivity` & `cumulativeUsage`)**: Every response reports exact `filesRead`, `filesModified`, `commandsRun`, `mediaGenerated` (photos, icons, screenshots, WebM/MP4 videos), and cumulative token consumption, plus on-demand context compaction (`compact: true` via `/compact`).
+- **Workspace Impact, Media & Token Tracking (`workspaceActivity` & `cumulativeUsage`)**: Completed compact responses summarize files read/modified, commands, and generated media (photos, icons, screenshots, WebM/MP4 videos). Verbose JSON includes `workspaceActivity` and cumulative token consumption, plus on-demand context compaction (`compact: true` via `/compact`).
 - **Photo, Image, Screenshot & Video Generation Support**: Full support for `agy`'s built-in `image-generator` subagent (`generate_image`), browser screenshot/video capture (`capture_browser_screenshot`, `browser_subagent`, `webm_encoder`), and `ffmpeg` / `sips` / `go` PATH injection (`buildSpawnEnv`).
 - **Native MCP Real-Time Notifications & Eager Tool Loading**: Emits `notifications/progress` and `notifications/message` on every `step_update`, exposes `antigravity://sessions/live`, and marks all tools with `_meta: { "antigravity/alwaysLoad": true }`.
 - **Full `agy 1.4.0` Compatibility**:
@@ -69,19 +81,20 @@ npm run install:plugin
 | :--- | :--- |
 | `antigravity_status` | Checks the local `agy` binary, version, clean `models` / `modelDetails` catalog, authentication state, and adapter limits. |
 | `antigravity_session_create` | Starts a persistent multi-turn session in `cwd` with a live activity channel. |
-| `antigravity_session_prompt` | Sends a prompt with a default `20s` live observation window (`waitMs`). Returns `status: "RUNNING"` + `timeline` + `workspaceActivity` + `nextCursor` if still working. |
+| `antigravity_session_prompt` | Sends a prompt with a default `20s` live observation window (`waitMs`). Returns `[RUNNING]`, `stateDetail`, recent steps, and `cursor` if still working. |
 | `antigravity_session_watch` | Reads the open live channel from `cursor` and returns new steps (`thought`, `message`, `tool_start`, `tool_done`, `question`, `subagent`) in real time. |
 | `antigravity_session_interrupt` | Interrupts an active turn without destroying the session (reconnects via `--conversation`) and optionally runs a `steerPrompt` immediately. |
-| `antigravity_session_list` | Lists active sessions, state (`idle`/`running`), active model, `currentStep`, `workspaceActivity`, `cumulativeUsage`, and `lastCursor`. |
+| `antigravity_session_list` | Lists active sessions, state (`idle`/`running`), active model, `stateDetail`, and `cursor`. |
 | `antigravity_session_close` | Closes and releases a persistent session. |
-| `antigravity_run` | Runs a single isolated turn (returning the full `timeline` and `workspaceActivity`) and closes the session automatically. |
+| `antigravity_run` | Runs a single isolated turn (returning an activity summary and final response) and closes the session automatically. |
 
 ### Key Parameters
 - `mode`:
   - `"plan"`: Read-only inspection and architectural analysis (no file edits).
   - `"auto"`: Automatically approves file edits and safe workspace commands while reviewing external actions.
   - `"accept-edits"`: Full write and terminal execution authorization for code changes, git branches, and tests.
-- `waitMs`: Live observation window in milliseconds (default `20000`). If the turn is still running when `waitMs` elapses, returns a live snapshot (`status: "RUNNING"`, `currentStep`, `timeline`, `workspaceActivity`, `nextCursor`) without stopping `agy`.
+- `waitMs`: Live observation window in milliseconds (default `20000`). If the turn is still running when `waitMs` elapses, returns a compact live update (`[RUNNING]`, `stateDetail`, recent steps, `cursor`) without stopping `agy`.
+- `verbose`: Set `true` for full JSON on status, create, prompt, watch, interrupt, list, and run.
 - `compact`: Set `true` to prefix the turn with `/compact` and summarize conversation history before executing the prompt.
 - `effort`: `"low" | "medium" | "high" | "xhigh" | "max"`.
 - `skipPermissions`: `true` (default) for autonomous non-blocking execution inside the workspace.
